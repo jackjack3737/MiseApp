@@ -1,98 +1,326 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, SafeAreaView, TouchableOpacity, ScrollView, StatusBar, TextInput, Keyboard, Dimensions } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Zap, Beef, Leaf, ChevronRight, Lock, Edit2, Activity } from 'lucide-react-native';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+const { width } = Dimensions.get('window');
 
-export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
+const PROTOCOLS = [
+  { 
+    id: 'Keto', 
+    name: 'KETO', 
+    desc: 'Metabolic Efficiency.',
+    icon: <Zap size={24} color="#FFD700" />, 
+    color: '#FFD700',
+    defaultSplit: { c: 5, p: 25, f: 70 } 
+  },
+  { 
+    id: 'Carnivore', 
+    name: 'CARNIVORE', 
+    desc: 'Apex Predator.',
+    icon: <Beef size={24} color="#e17055" />,
+    color: '#e17055',
+    defaultSplit: { c: 0, p: 40, f: 60 }
+  },
+  { 
+    id: 'Paleo', 
+    name: 'PALEO', 
+    desc: 'Ancestral Health.',
+    icon: <Leaf size={24} color="#00b894" />,
+    color: '#00b894',
+    defaultSplit: { c: 20, p: 30, f: 50 }
+  },
+  { 
+    id: 'LowCarb', 
+    name: 'LOW CARB', 
+    desc: 'Sustainable Balance.',
+    icon: <Activity size={24} color="#0984e3" />, 
+    color: '#0984e3',
+    defaultSplit: { c: 25, p: 35, f: 40 }
+  },
+];
+
+export default function SetupScreen() {
+  const router = useRouter();
+  
+  const [selectedProtocol, setSelectedProtocol] = useState('Keto');
+  const [kcal, setKcal] = useState(2000);
+
+  // Stati in GRAMMI
+  const [carbs, setCarbs] = useState(25);   
+  const [protein, setProtein] = useState(125); 
+  const [fat, setFat] = useState(155);
+
+  // Quando cambio protocollo, resetto i macro sulle percentuali ideali
+  useEffect(() => {
+    const proto = PROTOCOLS.find(p => p.id === selectedProtocol);
+    const split = proto.defaultSplit;
+    
+    // Calcolo grammi basati sulle calorie attuali
+    const cGrams = Math.round((kcal * (split.c / 100)) / 4);
+    const pGrams = Math.round((kcal * (split.p / 100)) / 4);
+    const fGrams = Math.round((kcal * (split.f / 100)) / 9);
+
+    setCarbs(cGrams);
+    setProtein(pGrams);
+    setFat(fGrams);
+  }, [selectedProtocol, kcal]);
+
+  // --- LOGICA DI RIBILANCIAMENTO SMART (ISOCALORICA) ---
+  const handleMacroChange = (type, newValueStr) => {
+    // 1. Pulisci l'input (se vuoto diventa 0)
+    let newVal = parseInt(newValueStr.replace(/[^0-9]/g, ''));
+    if (isNaN(newVal)) newVal = 0;
+
+    // 2. Calcola le calorie occupate dal nuovo valore
+    // Grassi = 9 kcal/g, Carbo/Pro = 4 kcal/g
+    const costPerGram = type === 'f' ? 9 : 4;
+    const newKcalTaken = newVal * costPerGram;
+    
+    // Se il nuovo valore supera da solo il budget calorico, lo limitiamo al max possibile
+    if (newKcalTaken > kcal) {
+        newVal = Math.floor(kcal / costPerGram);
+    }
+
+    // 3. Calorie rimanenti da distribuire agli altri due
+    const remainingKcal = kcal - (newVal * costPerGram);
+
+    // 4. Distribuzione proporzionale sugli altri due
+    // Calcoliamo quante calorie occupano attualmente gli altri due
+    let currentP_cal = protein * 4;
+    let currentF_cal = fat * 9;
+    let currentC_cal = carbs * 4;
+
+    if (type === 'c') {
+        const totalOther = currentP_cal + currentF_cal || 1; // Evita div/0
+        const ratio = remainingKcal / totalOther;
+        setCarbs(newVal);
+        setProtein(Math.round((currentP_cal * ratio) / 4));
+        setFat(Math.round((currentF_cal * ratio) / 9));
+    } 
+    else if (type === 'p') {
+        const totalOther = currentC_cal + currentF_cal || 1;
+        const ratio = remainingKcal / totalOther;
+        setProtein(newVal);
+        setCarbs(Math.round((currentC_cal * ratio) / 4));
+        setFat(Math.round((currentF_cal * ratio) / 9));
+    } 
+    else if (type === 'f') {
+        const totalOther = currentC_cal + currentP_cal || 1;
+        const ratio = remainingKcal / totalOther;
+        setFat(newVal);
+        setCarbs(Math.round((currentC_cal * ratio) / 4));
+        setProtein(Math.round((currentP_cal * ratio) / 4));
+    }
+  };
+
+  // Funzione per i tasti +/- (incrementi di 5g)
+  const incrementMacro = (type, delta) => {
+    let currentVal = type === 'c' ? carbs : (type === 'p' ? protein : fat);
+    handleMacroChange(type, (currentVal + delta).toString());
+  }
+
+  // Percentuali live per la UI
+  const currentTotalKcal = (carbs * 4) + (protein * 4) + (fat * 9);
+  // Piccola protezione per evitare NaN all'avvio
+  const safeTotal = currentTotalKcal > 0 ? currentTotalKcal : 1;
+  const carbsPct = Math.round(((carbs * 4) / safeTotal) * 100);
+  const proteinPct = Math.round(((protein * 4) / safeTotal) * 100);
+  const fatPct = Math.round(((fat * 9) / safeTotal) * 100);
+
+  // Componente Input + Slider
+  const MacroControl = ({ label, val, type, color, max }) => (
+    <View style={styles.macroRow}>
+      <View style={styles.macroHeader}>
+        <Text style={[styles.macroLabel, { color: color }]}>{label}</Text>
+        
+        {/* INPUT NUMERICO EDITABILE */}
+        <View style={styles.inputWrapper}>
+            <TextInput
+                style={styles.numericInput}
+                keyboardType="numeric"
+                value={val.toString()}
+                onChangeText={(text) => handleMacroChange(type, text)}
+                maxLength={3}
+                selectTextOnFocus
             />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+            <Text style={styles.unitText}>g</Text>
+            <Edit2 size={12} color="#636e72" style={{marginLeft: 6}} />
+        </View>
+      </View>
+      
+      {/* Slider Controls */}
+      <View style={styles.sliderControls}>
+         <TouchableOpacity onPress={() => incrementMacro(type, -5)} style={styles.btnMini}><Text style={styles.btnText}>-</Text></TouchableOpacity>
+         
+         {/* Visual Bar */}
+         <View style={styles.barTrack}>
+             <View style={[styles.barFill, { width: `${Math.min((val / max) * 100, 100)}%`, backgroundColor: color }]} />
+         </View>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+         <TouchableOpacity onPress={() => incrementMacro(type, 5)} style={styles.btnMini}><Text style={styles.btnText}>+</Text></TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
+        
+        {/* HEADER */}
+        <View style={styles.header}>
+          <Text style={styles.superTitle}>BIO-HACKING SETUP</Text>
+          <Text style={styles.title}>Configura il Motore</Text>
+        </View>
+
+        {/* 1. SELETTORE PROTOCOLLO */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.protocolList}>
+          {PROTOCOLS.map((p) => {
+            const isActive = selectedProtocol === p.id;
+            return (
+              <TouchableOpacity 
+                key={p.id} 
+                style={[styles.chip, isActive && { backgroundColor: p.color, borderColor: p.color }]}
+                onPress={() => setSelectedProtocol(p.id)}
+              >
+                {React.cloneElement(p.icon, { size: 20, color: isActive ? '#000' : p.color })}
+                <Text style={[styles.chipText, isActive && { color: '#000' }]}>{p.name}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        <View style={styles.divider} />
+
+        {/* 2. CALORIE MASTER (LOCKED) */}
+        <View style={styles.section}>
+            <View style={styles.rowBetween}>
+                <View>
+                    <Text style={styles.sectionTitle}>BUDGET ENERGETICO (FISSO)</Text>
+                    <Text style={styles.subTitle}>I macro si adatteranno a questo tetto.</Text>
+                </View>
+                <View style={{flexDirection:'row', alignItems:'center', gap:5, backgroundColor:'#222', paddingHorizontal:10, paddingVertical:5, borderRadius:8}}>
+                    <Lock size={14} color="#636e72" />
+                    <Text style={styles.bigValue}>{kcal}</Text>
+                </View>
+            </View>
+            <View style={styles.mainSliderControls}>
+                <TouchableOpacity onPress={() => setKcal(Math.max(1000, kcal - 50))} style={styles.btnBig}><Text style={styles.btnText}>-</Text></TouchableOpacity>
+                <View style={styles.barTrackBig}>
+                    <View style={[styles.barFill, { width: `${(kcal / 4000) * 100}%`, backgroundColor: '#fff' }]} />
+                </View>
+                <TouchableOpacity onPress={() => setKcal(Math.min(4000, kcal + 50))} style={styles.btnBig}><Text style={styles.btnText}>+</Text></TouchableOpacity>
+            </View>
+        </View>
+
+        {/* 3. MACRO TUNING */}
+        <View style={styles.macroCard}>
+            <Text style={styles.sectionTitle}>BILANCIAMENTO FINE</Text>
+            <Text style={styles.subTitleCard}>Modifica i grammi o usa i tasti +/-</Text>
+            
+            <View style={styles.chartRow}>
+                <View style={{alignItems:'center'}}>
+                    <Text style={[styles.pctText, {color:'#fdcb6e'}]}>{carbsPct}%</Text>
+                    <Text style={styles.pctLabel}>CARBS</Text>
+                </View>
+                <View style={{alignItems:'center'}}>
+                    <Text style={[styles.pctText, {color:'#74b9ff'}]}>{proteinPct}%</Text>
+                    <Text style={styles.pctLabel}>PRO</Text>
+                </View>
+                <View style={{alignItems:'center'}}>
+                    <Text style={[styles.pctText, {color:'#ff7675'}]}>{fatPct}%</Text>
+                    <Text style={styles.pctLabel}>FATS</Text>
+                </View>
+            </View>
+
+            {/* CONTROLLI EDITABILI */}
+            <MacroControl label="CARBOIDRATI (4kcal/g)" val={carbs} type="c" color="#fdcb6e" max={200} />
+            <MacroControl label="PROTEINE (4kcal/g)" val={protein} type="p" color="#74b9ff" max={350} />
+            <MacroControl label="GRASSI (9kcal/g)" val={fat} type="f" color="#ff7675" max={250} />
+            
+        </View>
+
+      </ScrollView>
+
+      {/* FOOTER */}
+      <View style={styles.footer}>
+        <TouchableOpacity 
+            style={styles.mainButton}
+            onPress={() => {
+                router.push({
+                    pathname: '/(tabs)/explore',
+                    params: { 
+                        protocol: selectedProtocol, 
+                        kcal: kcal,
+                        targetCarbs: carbs,
+                        targetProtein: protein,
+                        targetFat: fat
+                    }
+                });
+            }}
+        >
+            <View>
+                <Text style={styles.btnTitle}>GENERA PIANO</Text>
+                <Text style={styles.btnSubtitle}>{kcal} kcal • {fat}g Grassi</Text>
+            </View>
+            <ChevronRight size={28} color="#000" />
+        </TouchableOpacity>
+      </View>
+
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
+  container: { flex: 1, backgroundColor: '#000' },
+  
+  header: { padding: 25, paddingTop: 50 },
+  superTitle: { color: '#00cec9', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 5 },
+  title: { fontSize: 34, fontWeight: '900', color: '#fff' },
+
+  protocolList: { paddingHorizontal: 25, gap: 10, marginBottom: 20 },
+  chip: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 30, borderWidth: 1, borderColor: '#333', gap: 10, marginRight: 10 },
+  chipText: { color: '#fff', fontWeight: '900', fontSize: 14, letterSpacing: 0.5 },
+
+  divider: { height: 1, backgroundColor: '#222', marginVertical: 20 },
+
+  section: { paddingHorizontal: 25, marginBottom: 30 },
+  sectionTitle: { color: '#636e72', fontSize: 12, fontWeight: '700', letterSpacing: 1, marginBottom: 5 },
+  subTitle: { color: '#b2bec3', fontSize: 12, marginBottom: 10 },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 15 },
+  bigValue: { color: '#fff', fontSize: 28, fontWeight: '900' },
+
+  mainSliderControls: { flexDirection: 'row', alignItems: 'center', gap: 15 },
+  btnBig: { width: 50, height: 50, borderRadius: 16, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
+  btnText: { color: '#fff', fontSize: 22, lineHeight: 24 },
+  
+  barTrackBig: { flex: 1, height: 12, backgroundColor: '#222', borderRadius: 6, overflow: 'hidden' },
+  
+  macroCard: { marginHorizontal: 20, backgroundColor: '#111', borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#333' },
+  subTitleCard: { color: '#636e72', fontSize: 12, marginBottom: 20, fontStyle:'italic' },
+  
+  chartRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 30, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#222' },
+  pctText: { fontSize: 24, fontWeight: '900' },
+  pctLabel: { color: '#636e72', fontSize: 10, fontWeight: '700', marginTop: 5 },
+
+  macroRow: { marginBottom: 20 },
+  macroHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  macroLabel: { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+  
+  // INPUT STYLES
+  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#222', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#333', minWidth: 80, justifyContent:'flex-end' },
+  numericInput: { color: '#fff', fontSize: 18, fontWeight: '700', padding: 0, textAlign: 'right' },
+  unitText: { color: '#636e72', fontSize: 12, marginLeft: 2, fontWeight:'600' },
+
+  // Mini Sliders
+  sliderControls: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  btnMini: { width: 35, height: 35, borderRadius: 10, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center' },
+  barTrack: { flex: 1, height: 6, backgroundColor: '#222', borderRadius: 3, overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: 3 },
+
+  footer: { position: 'absolute', bottom: 30, left: 20, right: 20 },
+  mainButton: { backgroundColor: '#00cec9', height: 75, borderRadius: 25, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, elevation: 10 },
+  btnTitle: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+  btnSubtitle: { color: '#2d3436', fontSize: 12, fontWeight: '600' },
 });
