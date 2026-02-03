@@ -12,9 +12,10 @@ export default function TabLayout() {
         tabBarActiveTintColor: '#00cec9',
         tabBarInactiveTintColor: '#636e72',
         tabBarLabelStyle: styles.tabBarLabel,
-        tabBarHideKeyboard: true, // Evita che il dock salga quando scrivi
+        tabBarHideKeyboard: true,
       }}>
       
+      {/* 1. SETUP - DEVE ESSERE IL FILE index.tsx */}
       <Tabs.Screen
         name="index"
         options={{
@@ -23,6 +24,7 @@ export default function TabLayout() {
         }}
       />
 
+      {/* 2. ESPLORA */}
       <Tabs.Screen
         name="explore"
         options={{
@@ -31,22 +33,25 @@ export default function TabLayout() {
         }}
       />
 
+      {/* 3. TRACKER - L'icona centrale Plus */}
       <Tabs.Screen
         name="tracker"
         options={{
           title: 'Tracker',
-          tabBarIcon: ({ color }) => <PlusCircle size={24} color={color} strokeWidth={2.5} />,
+          tabBarIcon: ({ color }) => <PlusCircle size={26} color={color} strokeWidth={2.5} />,
         }}
       />
 
+      {/* 4. ARCHIVIO */}
       <Tabs.Screen
         name="history"
         options={{
-          title: 'Archivio',
+          title: 'Storico',
           tabBarIcon: ({ color }) => <Calendar size={22} color={color} />,
         }}
       />
 
+      {/* 5. SPESA */}
       <Tabs.Screen
         name="cart"
         options={{
@@ -55,13 +60,9 @@ export default function TabLayout() {
         }}
       />
 
-      {/* IL PROFILO È STATO COMPLETAMENTE ELIMINATO DA QUI */}
-      <Tabs.Screen
-        name="profile"
-        options={{
-          href: null, // Questa riga nasconde la tab se il file esiste ancora
-        }}
-      />
+      {/* FORCE HIDE: Questi file non devono apparire nel dock anche se esistono */}
+      <Tabs.Screen name="profile" options={{ href: null }} />
+      <Tabs.Screen name="setup" options={{ href: null }} />
     </Tabs>
   );
 }
@@ -71,19 +72,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     borderTopColor: '#1e1e1e',
     borderTopWidth: 1,
-    // ALTEZZA MASSIMA: Alzata per separarla nettamente dai tasti di sistema
-    height: Platform.OS === 'ios' ? 110 : 90, 
-    // PADDING EXTRA: Spinge il contenuto molto più in alto
-    paddingBottom: Platform.OS === 'ios' ? 45 : 30, 
-    paddingTop: 10,
-    elevation: 10, // Ombra su Android
+    // ALTEZZA ULTRA: Alzata ulteriormente per distanziarsi dai tasti del telefono
+    height: Platform.OS === 'ios' ? 115 : 95, 
+    // PADDING INFERIORE: Spinge icone e scritte verso l'alto
+    paddingBottom: Platform.OS === 'ios' ? 45 : 35, 
+    paddingTop: 12,
     position: 'absolute',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
+    // Ombra per far fluttuare il dock sul nero
+    elevation: 20,
+    shadowColor: '#00cec9',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
   },
   tabBarLabel: {
     fontSize: 10,
-    fontWeight: '800',
+    fontWeight: '900',
     marginTop: 4,
+    textTransform: 'uppercase',
   },
 });

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, TouchableOpacity, ScrollView, StatusBar, TextInput, Keyboard, Dimensions, Alert } from 'react-native';
+// AGGIUNTO: Platform negli import per evitare il crash "Property 'Platform' doesn't exist"
+import { StyleSheet, Text, View, SafeAreaView, TouchableOpacity, ScrollView, StatusBar, TextInput, Keyboard, Dimensions, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+// AGGIUNTO: AsyncStorage per salvare i dati che hai inserito
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Zap, Beef, Leaf, ChevronRight, Edit2, Activity } from 'lucide-react-native';
 
@@ -27,7 +29,7 @@ const PROTOCOLS = [
     id: 'Paleo', 
     name: 'PALEO', 
     desc: 'Ancestral Health.',
-    icon: <Leaf size={24} color="#00b894" />,
+    icon: <Leaf size={24} color="#00b894" />, 
     color: '#00b894',
     defaultSplit: { c: 20, p: 30, f: 50 }
   },
@@ -41,38 +43,17 @@ const PROTOCOLS = [
   },
 ];
 
+// AGGIUNTO: export default obbligatorio per Expo Router
 export default function SetupScreen() {
   const router = useRouter();
   const [selectedProtocol, setSelectedProtocol] = useState('Keto');
   const [kcal, setKcal] = useState(2000);
+
   const [carbs, setCarbs] = useState(25);   
   const [protein, setProtein] = useState(125); 
   const [fat, setFat] = useState(155);
 
   const isInternalUpdate = useRef(false);
-
-  // LOGICA DI SALVATAGGIO
-  const handleSaveAndGenerate = async () => {
-    try {
-      const setupData = {
-        targetCalories: kcal,
-        targetCarbs: carbs,
-        targetProtein: protein,
-        targetFat: fat,
-        protocol: selectedProtocol,
-      };
-      
-      // Salva localmente così la Dashboard/Home può leggere questi dati
-      await AsyncStorage.setItem('@user_profile', JSON.stringify(setupData));
-      
-      router.push({
-        pathname: '/(tabs)/explore',
-        params: setupData as any
-      });
-    } catch (e) {
-      Alert.alert("Errore", "Impossibile salvare i dati del setup.");
-    }
-  };
 
   useEffect(() => {
     if (isInternalUpdate.current) {
@@ -105,7 +86,11 @@ export default function SetupScreen() {
     if (isNaN(newVal)) newVal = 0;
 
     const costPerGram = type === 'f' ? 9 : 4;
-    if (newVal * costPerGram > kcal) newVal = Math.floor(kcal / costPerGram);
+    const newKcalTaken = newVal * costPerGram;
+    
+    if (newKcalTaken > kcal) {
+        newVal = Math.floor(kcal / costPerGram);
+    }
 
     const remainingKcal = kcal - (newVal * costPerGram);
     let currentP_cal = protein * 4;
@@ -139,6 +124,33 @@ export default function SetupScreen() {
     let currentVal = type === 'c' ? carbs : (type === 'p' ? protein : fat);
     handleMacroChange(type, (currentVal + delta).toString());
   }
+
+  // AGGIUNTO: Funzione per salvare effettivamente su AsyncStorage
+  const handleGeneratePlan = async () => {
+    try {
+      const settings = {
+        targetCalories: kcal,
+        protocol: selectedProtocol,
+        carbs,
+        protein,
+        fat
+      };
+      await AsyncStorage.setItem('@user_profile', JSON.stringify(settings));
+      
+      router.push({
+        pathname: '/(tabs)/explore',
+        params: { 
+            protocol: selectedProtocol, 
+            kcal: kcal,
+            targetCarbs: carbs,
+            targetProtein: protein,
+            targetFat: fat
+        }
+      });
+    } catch (e) {
+      console.log("Errore salvataggio profilo", e);
+    }
+  };
 
   const currentTotalKcal = (carbs * 4) + (protein * 4) + (fat * 9);
   const safeTotal = currentTotalKcal > 0 ? currentTotalKcal : 1;
@@ -176,7 +188,7 @@ export default function SetupScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={{ paddingBottom: 220 }} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <Text style={styles.superTitle}>BIO-HACKING SETUP</Text>
           <Text style={styles.title}>Configura il Motore</Text>
@@ -252,18 +264,17 @@ export default function SetupScreen() {
         </View>
       </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity 
-            style={styles.mainButton}
-            onPress={handleSaveAndGenerate}
-        >
-            <View>
-                <Text style={styles.btnTitle}>GENERA PIANO</Text>
-                <Text style={styles.btnSubtitle}>{kcal} kcal • {fat}g Grassi</Text>
-            </View>
-            <ChevronRight size={28} color="#000" />
-        </TouchableOpacity>
-      </View>
+      {/* POSIZIONAMENTO ALZATO PER DOCK ALTO */}
+      <TouchableOpacity 
+          style={styles.mainButton}
+          onPress={handleGeneratePlan}
+      >
+          <View>
+              <Text style={styles.btnTitle}>GENERA PIANO</Text>
+              <Text style={styles.btnSubtitle}>{kcal} kcal • {fat}g Grassi</Text>
+          </View>
+          <ChevronRight size={28} color="#000" />
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -302,8 +313,25 @@ const styles = StyleSheet.create({
   btnMini: { width: 35, height: 35, borderRadius: 10, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center' },
   barTrack: { flex: 1, height: 6, backgroundColor: '#222', borderRadius: 3, overflow: 'hidden' },
   barFill: { height: '100%', borderRadius: 3 },
-  footer: { position: 'absolute', bottom: 30, left: 20, right: 20 },
-  mainButton: { backgroundColor: '#00cec9', height: 75, borderRadius: 25, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, elevation: 10 },
+  mainButton: { 
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 140 : 120, 
+    left: 20, 
+    right: 20,
+    backgroundColor: '#00cec9', 
+    height: 75, 
+    borderRadius: 25, 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    paddingHorizontal: 25, 
+    elevation: 10,
+    shadowColor: '#00cec9',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    zIndex: 9999,
+  },
   btnTitle: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
   btnSubtitle: { color: '#2d3436', fontSize: 12, fontWeight: '600' },
 });

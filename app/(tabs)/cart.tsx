@@ -1,30 +1,43 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text, FlatList, TouchableOpacity, ActivityIndicator, StatusBar, Alert, RefreshControl } from 'react-native';
-import { supabase } from '../../src/lib/supabase';
-import { ShoppingCart, Trash2, CheckCircle2, Circle, RefreshCw } from 'lucide-react-native';
+import { StyleSheet, View, Text, FlatList, TouchableOpacity, ActivityIndicator, StatusBar, Alert, RefreshControl, Platform, Linking } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from 'expo-router';
+import { Trash2, CheckCircle2, Circle, RefreshCw, ShoppingBag, Zap, ExternalLink } from 'lucide-react-native';
 
 export default function ShoppingListScreen() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const navigation = useNavigation();
 
+  // Carica i dati all'avvio e ogni volta che l'utente torna sulla pagina
   useEffect(() => {
-    fetchCart();
-  }, []);
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchLocalCart();
+    });
+    fetchLocalCart();
+    return unsubscribe;
+  }, [navigation]);
 
-  async function fetchCart() {
-    setLoading(true);
+  async function fetchLocalCart() {
+    if (!refreshing) setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('shopping_list')
-        .select('*')
-        .order('is_bought', { ascending: true })
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setItems(data || []);
+      const savedList = await AsyncStorage.getItem('@user_shopping_list');
+      if (savedList) {
+        const parsedList = JSON.parse(savedList);
+        // Ordina: prima quelli da comprare, poi i più recenti
+        const sortedList = parsedList.sort((a: any, b: any) => {
+          if (a.is_bought === b.is_bought) {
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+          }
+          return a.is_bought ? 1 : -1;
+        });
+        setItems(sortedList);
+      } else {
+        setItems([]);
+      }
     } catch (e) {
-      console.error(e);
+      console.error("Errore caricamento locale:", e);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -33,92 +46,120 @@ export default function ShoppingListScreen() {
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchCart();
+    fetchLocalCart();
   };
 
-  async function toggleItem(id: string, currentStatus: boolean) {
+  const formatIngredientName = (rawName: any) => {
     try {
-      const { error } = await supabase
-        .from('shopping_list')
-        .update({ is_bought: !currentStatus })
-        .eq('id', id);
-
-      if (error) throw error;
-      // Aggiornamento ottimistico della UI
-      setItems(items.map(item => item.id === id ? { ...item, is_bought: !currentStatus } : item));
+      if (!rawName) return "";
+      if (typeof rawName === 'string' && !rawName.trim().startsWith('{')) {
+        return rawName.replace(/["'\[\]]/g, '').trim().replace(/^\w/, (c) => c.toUpperCase());
+      }
+      const obj = typeof rawName === 'string' ? JSON.parse(rawName) : rawName;
+      if (obj && typeof obj === 'object') {
+        const q = obj.quantity || '';
+        const u = obj.unit || '';
+        const n = obj.name || '';
+        return `${q} ${u} ${n}`.trim().replace(/^\w/, (c) => c.toUpperCase());
+      }
     } catch (e) {
-      Alert.alert("Errore", "Impossibile aggiornare lo stato.");
+      return String(rawName).replace(/["'\[\]]/g, '').trim();
+    }
+    return rawName;
+  };
+
+  async function toggleItem(id: string) {
+    try {
+      const updated = items.map(item => 
+        item.id === id ? { ...item, is_bought: !item.is_bought } : item
+      );
+      setItems(updated);
+      await AsyncStorage.setItem('@user_shopping_list', JSON.stringify(updated));
+    } catch (e) {
+      Alert.alert("Errore", "Impossibile aggiornare lo stato locale.");
     }
   }
 
   async function deleteItem(id: string) {
     try {
-      const { error } = await supabase.from('shopping_list').delete().eq('id', id);
-      if (error) throw error;
-      setItems(items.filter(item => item.id !== id));
+      const updated = items.filter(item => item.id !== id);
+      setItems(updated);
+      await AsyncStorage.setItem('@user_shopping_list', JSON.stringify(updated));
     } catch (e) {
       Alert.alert("Errore", "Impossibile eliminare l'articolo.");
     }
   }
 
   async function clearBoughtItems() {
-    const boughtIds = items.filter(i => i.is_bought).map(i => i.id);
-    if (boughtIds.length === 0) {
-      Alert.alert("Info", "Non ci sono articoli completati da rimuovere.");
-      return;
-    }
+    const boughtCount = items.filter(i => i.is_bought).length;
+    if (boughtCount === 0) return;
 
-    Alert.alert("Pulisci Lista", `Rimuovere ${boughtIds.length} articoli acquistati?`, [
+    Alert.alert("Pulisci Lista", `Rimuovere ${boughtCount} articoli completati?`, [
       { text: "Annulla", style: "cancel" },
-      { text: "Rimuovi tutto", style: "destructive", onPress: async () => {
-          const { error } = await supabase.from('shopping_list').delete().in('id', boughtIds);
-          if (!error) fetchCart();
+      { text: "Rimuovi", style: "destructive", onPress: async () => {
+          const updated = items.filter(i => !i.is_bought);
+          setItems(updated);
+          await AsyncStorage.setItem('@user_shopping_list', JSON.stringify(updated));
       }}
     ]);
   }
 
   const renderItem = ({ item }: { item: any }) => (
-    <TouchableOpacity 
-      style={[styles.card, item.is_bought && styles.cardBought]} 
-      onPress={() => toggleItem(item.id, item.is_bought)}
-      activeOpacity={0.7}
-    >
-      <View style={styles.leftInfo}>
-        {item.is_bought ? (
-          <CheckCircle2 size={22} color="#00cec9" />
-        ) : (
-          <Circle size={22} color="#333" />
-        )}
-        <View style={styles.textContainer}>
-          <Text style={[styles.itemName, item.is_bought && styles.textBought]}>
-            {item.name}
-          </Text>
-          {item.category && (
-            <View style={styles.categoryBadge}>
-              <Text style={styles.categoryText}>{item.category.toUpperCase()}</Text>
-            </View>
+    <View style={[styles.card, item.is_bought && styles.cardBought]}>
+      <TouchableOpacity 
+        style={styles.leftInfo} 
+        onPress={() => toggleItem(item.id)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.iconContainer}>
+          {item.is_bought ? (
+            <CheckCircle2 size={24} color="#00cec9" strokeWidth={2.5} />
+          ) : (
+            <Circle size={24} color="#333" strokeWidth={2} />
           )}
         </View>
-      </View>
+        <View style={styles.textContainer}>
+          <Text style={[styles.itemName, item.is_bought && styles.textBought]}>
+            {formatIngredientName(item.name)}
+          </Text>
+          <View style={styles.badgeRow}>
+            {item.category ? (
+              <View style={styles.categoryBadge}>
+                <Text style={styles.categoryText}>{item.category.toUpperCase()}</Text>
+              </View>
+            ) : null}
+            
+            {item.product_url ? (
+              <TouchableOpacity 
+                onPress={() => Linking.openURL(item.product_url)}
+                style={styles.shopBadge}
+              >
+                <Zap size={10} color="#000" />
+                <Text style={styles.shopText}>LIVE BETTER SHOP</Text>
+                <ExternalLink size={10} color="#000" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
+      </TouchableOpacity>
       
       <TouchableOpacity onPress={() => deleteItem(item.id)} style={styles.deleteBtn}>
         <Trash2 size={18} color={item.is_bought ? "#222" : "#ff7675"} />
       </TouchableOpacity>
-    </TouchableOpacity>
+    </View>
   );
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      
       <View style={styles.header}>
         <View>
+          <Text style={styles.headerSub}>INVENTARIO LOCALE</Text>
           <Text style={styles.headerTitle}>CARRELLO</Text>
-          <Text style={styles.headerSub}>{items.length} ARTICOLI IN LISTA</Text>
         </View>
-        <View style={{flexDirection: 'row', gap: 10}}>
+        <View style={styles.headerActions}>
             <TouchableOpacity onPress={onRefresh} style={styles.iconBtn}>
-                <RefreshCw size={18} color="#00cec9" />
+                <RefreshCw size={20} color="#00cec9" />
             </TouchableOpacity>
             <TouchableOpacity onPress={clearBoughtItems} style={styles.clearBtn}>
                 <Text style={styles.clearBtnText}>PULISCI</Text>
@@ -133,15 +174,18 @@ export default function ShoppingListScreen() {
           data={items}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderItem}
-          contentContainerStyle={{ padding: 20, paddingBottom: 120 }}
+          contentContainerStyle={styles.listPadding}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#00cec9" />
           }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <ShoppingCart size={60} color="#111" />
-              <Text style={styles.emptyText}>Lista vuota</Text>
-              <Text style={styles.emptySub}>Aggiungi gli ingredienti dalle tue ricette preferite.</Text>
+              <View style={styles.emptyIconCircle}>
+                <ShoppingBag size={40} color="#333" />
+              </View>
+              <Text style={styles.emptyText}>CARRELLO VUOTO</Text>
+              <Text style={styles.emptySub}>Gli ingredienti aggiunti dalle ricette appariranno qui localmente.</Text>
             </View>
           }
         />
@@ -158,45 +202,72 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between', 
     alignItems: 'flex-end', 
     paddingHorizontal: 25, 
-    paddingTop: 60, 
-    paddingBottom: 20,
+    paddingTop: Platform.OS === 'ios' ? 60 : 40, 
+    paddingBottom: 25,
+    backgroundColor: '#000',
     borderBottomWidth: 1,
     borderBottomColor: '#111'
   },
-  headerTitle: { color: '#fff', fontSize: 32, fontWeight: '900', letterSpacing: -1 },
-  headerSub: { color: '#00cec9', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
-  iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
-  clearBtn: { paddingHorizontal: 15, height: 40, borderRadius: 12, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-  clearBtnText: { color: '#ff7675', fontSize: 10, fontWeight: '900' },
+  headerTitle: { color: '#fff', fontSize: 34, fontWeight: '900', letterSpacing: -1 },
+  headerSub: { color: '#00cec9', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 4 },
+  headerActions: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  iconBtn: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
+  clearBtn: { paddingHorizontal: 15, height: 44, borderRadius: 14, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
+  clearBtnText: { color: '#ff7675', fontSize: 11, fontWeight: '900' },
+  listPadding: { 
+    padding: 20, 
+    paddingBottom: Platform.OS === 'ios' ? 140 : 120 
+  },
   card: { 
     flexDirection: 'row', 
     alignItems: 'center', 
     justifyContent: 'space-between',
     backgroundColor: '#111', 
-    padding: 16, 
-    borderRadius: 20, 
-    marginBottom: 10, 
+    padding: 18, 
+    borderRadius: 24, 
+    marginBottom: 12, 
     borderWidth: 1, 
-    borderColor: '#222' 
+    borderColor: '#222',
   },
-  cardBought: { borderColor: '#00cec920', opacity: 0.5 },
-  leftInfo: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  cardBought: { borderColor: '#00cec930', opacity: 0.4 },
+  leftInfo: { flexDirection: 'row', alignItems: 'center', gap: 15, flex: 1 },
+  iconContainer: { width: 30, alignItems: 'center' },
   textContainer: { flex: 1 },
-  itemName: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  itemName: { color: '#fff', fontSize: 16, fontWeight: '700' },
   textBought: { textDecorationLine: 'line-through', color: '#636e72' },
+  badgeRow: { flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' },
   categoryBadge: { 
-    alignSelf: 'flex-start', 
     backgroundColor: '#1a1a1a', 
-    paddingHorizontal: 7, 
-    paddingVertical: 2, 
-    borderRadius: 5, 
-    marginTop: 5,
-    borderWidth: 0.5,
-    borderColor: '#333'
+    paddingHorizontal: 8, 
+    paddingVertical: 3, 
+    borderRadius: 6, 
+    borderWidth: 1,
+    borderColor: '#262626'
   },
-  categoryText: { color: '#636e72', fontSize: 8, fontWeight: '900' },
-  deleteBtn: { padding: 8 },
-  emptyContainer: { alignItems: 'center', marginTop: 120 },
-  emptyText: { color: '#fff', fontSize: 18, fontWeight: '900', marginTop: 20 },
-  emptySub: { color: '#636e72', fontSize: 13, textAlign: 'center', marginTop: 8, paddingHorizontal: 50 }
+  categoryText: { color: '#636e72', fontSize: 9, fontWeight: '900' },
+  shopBadge: { 
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#00cec9', 
+    paddingHorizontal: 10, 
+    paddingVertical: 3, 
+    borderRadius: 6, 
+  },
+  shopText: { color: '#000', fontSize: 9, fontWeight: '900' },
+  deleteBtn: { padding: 10, backgroundColor: '#1a1a1a', borderRadius: 12, marginLeft: 10 },
+  emptyContainer: { alignItems: 'center', marginTop: 100 },
+  emptyIconCircle: { 
+    width: 100, 
+    height: 100, 
+    borderRadius: 50, 
+    backgroundColor: '#111', 
+    justifyContent: 'center', 
+    alignItems: 'center',
+    marginBottom: 25,
+    borderWidth: 1,
+    borderColor: '#222'
+  },
+  emptyText: { color: '#fff', fontSize: 20, fontWeight: '900' },
+  emptySub: { color: '#636e72', fontSize: 14, textAlign: 'center', marginTop: 10, paddingHorizontal: 60 }
 });

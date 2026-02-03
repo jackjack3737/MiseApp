@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, FlatList, TouchableOpacity, ActivityIndicator, StatusBar, Alert, Modal, TextInput, ScrollView } from 'react-native';
-import { supabase } from '../../src/lib/supabase';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Utensils, Flame, Trash2, Edit3, X, Check } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ChevronLeft, ChevronRight, Trash2, Edit3, X, Check } from 'lucide-react-native';
 import { format, addDays, subDays } from 'date-fns';
 import { it } from 'date-fns/locale';
 
@@ -13,53 +13,86 @@ export default function HistoryScreen() {
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
 
+  // Carica i dati ogni volta che cambia la data selezionata
   useEffect(() => {
-    fetchLogs();
+    fetchLocalLogs();
   }, [selectedDate]);
 
-  async function fetchLogs() {
+  async function fetchLocalLogs() {
     setLoading(true);
-    const dateString = format(selectedDate, 'yyyy-MM-dd');
-    const { data, error } = await supabase
-      .from('daily_logs')
-      .select('*')
-      .eq('date', dateString)
-      .order('created_at', { ascending: false });
+    try {
+      const dateString = format(selectedDate, 'yyyy-MM-dd');
+      const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
+      
+      if (savedLogs) {
+        let allLogs = JSON.parse(savedLogs);
+        
+        // --- AUTO-CLEANING ANCHE QUI (30 GIORNI) ---
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const limitDate = format(thirtyDaysAgo, 'yyyy-MM-dd');
 
-    if (!error) setLogs(data || []);
-    setLoading(false);
+        const cleanedLogs = allLogs.filter((log: any) => log.date >= limitDate);
+        
+        // Se abbiamo pulito dati vecchi, aggiorniamo lo storage
+        if (cleanedLogs.length !== allLogs.length) {
+          await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(cleanedLogs));
+        }
+
+        // Filtra per la data selezionata nel calendario
+        const filtered = cleanedLogs.filter((log: any) => log.date === dateString);
+        setLogs(filtered);
+      } else {
+        setLogs([]);
+      }
+    } catch (e) {
+      console.error("Errore lettura history locale:", e);
+    } finally {
+      setLoading(false);
+    }
   }
 
   const deleteLog = async (id: string) => {
-    Alert.alert("Elimina Pasto", "Rimuovere questo pasto?", [
+    Alert.alert("Elimina Pasto", "Rimuovere questo pasto dalla storia?", [
       { text: "Annulla", style: "cancel" },
       { text: "Elimina", style: "destructive", onPress: async () => {
-          const { error } = await supabase.from('daily_logs').delete().eq('id', id);
-          if (!error) fetchLogs();
+          try {
+            const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
+            if (savedLogs) {
+              const allLogs = JSON.parse(savedLogs);
+              const updated = allLogs.filter((l: any) => l.id !== id);
+              await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(updated));
+              fetchLocalLogs(); // Refresh
+            }
+          } catch (e) {
+            Alert.alert("Errore", "Impossibile eliminare il log.");
+          }
       }}
     ]);
   };
 
   const saveEdit = async () => {
     if (!editingItem) return;
-
-    // Usiamo food_name per il salvataggio perché è la colonna reale del tuo DB
-    const { error } = await supabase
-      .from('daily_logs')
-      .update({
-        food_name: editingItem.food_name || editingItem.title, 
-        kcal: parseInt(editingItem.kcal) || 0,
-        proteins: parseInt(editingItem.proteins) || 0,
-        carbs: parseInt(editingItem.carbs) || 0,
-        fats: parseInt(editingItem.fats) || 0,
-      })
-      .eq('id', editingItem.id);
-
-    if (!error) {
-      setEditModalVisible(false);
-      fetchLogs();
-    } else {
-      Alert.alert("Errore", "Impossibile aggiornare i dati nel database.");
+    try {
+      const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
+      if (savedLogs) {
+        const allLogs = JSON.parse(savedLogs);
+        const updated = allLogs.map((l: any) => 
+          l.id === editingItem.id ? {
+            ...editingItem,
+            kcal: parseInt(editingItem.kcal) || 0,
+            proteins: parseInt(editingItem.proteins) || 0,
+            carbs: parseInt(editingItem.carbs) || 0,
+            fats: parseInt(editingItem.fats) || 0,
+          } : l
+        );
+        
+        await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(updated));
+        setEditModalVisible(false);
+        fetchLocalLogs();
+      }
+    } catch (e) {
+      Alert.alert("Errore", "Impossibile salvare le modifiche.");
     }
   };
 
@@ -88,10 +121,10 @@ export default function HistoryScreen() {
       </View>
 
       <View style={styles.summaryCard}>
-        <View style={styles.summaryItem}><Text style={styles.summaryVal}>{totals.kcal}</Text><Text style={styles.summaryLabel}>KCAL</Text></View>
-        <View style={styles.summaryItem}><Text style={[styles.summaryVal, {color: '#fdcb6e'}]}>{totals.c}g</Text><Text style={styles.summaryLabel}>CARBS</Text></View>
-        <View style={styles.summaryItem}><Text style={[styles.summaryVal, {color: '#74b9ff'}]}>{totals.p}g</Text><Text style={styles.summaryLabel}>PRO</Text></View>
-        <View style={styles.summaryItem}><Text style={[styles.summaryVal, {color: '#ff7675'}]}>{totals.f}g</Text><Text style={styles.summaryLabel}>FATS</Text></View>
+        <View style={styles.summaryItem}><Text style={styles.summaryVal}>{Math.round(totals.kcal)}</Text><Text style={styles.summaryLabel}>KCAL</Text></View>
+        <View style={styles.summaryItem}><Text style={[styles.summaryVal, {color: '#fdcb6e'}]}>{Math.round(totals.c)}g</Text><Text style={styles.summaryLabel}>CARBS</Text></View>
+        <View style={styles.summaryItem}><Text style={[styles.summaryVal, {color: '#74b9ff'}]}>{Math.round(totals.p)}g</Text><Text style={styles.summaryLabel}>PRO</Text></View>
+        <View style={styles.summaryItem}><Text style={[styles.summaryVal, {color: '#ff7675'}]}>{Math.round(totals.f)}g</Text><Text style={styles.summaryLabel}>FATS</Text></View>
       </View>
 
       {loading ? (
@@ -104,17 +137,15 @@ export default function HistoryScreen() {
           renderItem={({ item }) => (
             <View style={styles.logCard}>
               <View style={{ flex: 1 }}>
-                {/* LOGICA FIX: Mostra food_name se esiste, altrimenti title */}
-                <Text style={styles.logTitle}>{item.food_name || item.title || "Pasto senza nome"}</Text>
-                
+                <Text style={styles.logTitle}>{item.food_name || "Pasto senza nome"}</Text>
                 <Text style={styles.logMeta}>
-                  P: {item.proteins}g • F: {item.fats}g • C: {item.carbs}g
+                  {item.meal_type} • P: {Math.round(item.proteins)}g • F: {Math.round(item.fats)}g • C: {Math.round(item.carbs)}g
                 </Text>
               </View>
               
               <View style={styles.rightActions}>
                 <View style={styles.kcalBox}>
-                  <Text style={styles.kcalText}>{item.kcal}</Text>
+                  <Text style={styles.kcalText}>{Math.round(item.kcal)}</Text>
                 </View>
                 
                 <TouchableOpacity 
@@ -135,18 +166,18 @@ export default function HistoryScreen() {
           )}
           ListEmptyComponent={
             <View style={styles.center}>
-                <Text style={{color:'#444', marginTop: 40}}>Nessun pasto tracciato per questo giorno.</Text>
+                <Text style={{color:'#444', marginTop: 40, textAlign: 'center'}}>Nessun pasto tracciato in questa data.</Text>
             </View>
           }
         />
       )}
 
-      {/* MODALE DI MODIFICA */}
+      {/* MODALE DI MODIFICA LOCALE */}
       <Modal visible={editModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Dettagli Pasto</Text>
+              <Text style={styles.modalTitle}>Modifica Pasto</Text>
               <TouchableOpacity onPress={() => setEditModalVisible(false)}><X color="#fff" size={24} /></TouchableOpacity>
             </View>
             
@@ -154,7 +185,7 @@ export default function HistoryScreen() {
               <Text style={styles.inputLabel}>NOME ALIMENTO</Text>
               <TextInput 
                 style={styles.input} 
-                value={editingItem?.food_name || editingItem?.title} 
+                value={editingItem?.food_name} 
                 onChangeText={(t) => setEditingItem({...editingItem, food_name: t})}
                 placeholder="Nome..."
                 placeholderTextColor="#444"
@@ -184,7 +215,7 @@ export default function HistoryScreen() {
 
               <TouchableOpacity style={styles.saveBtn} onPress={saveEdit}>
                 <Check color="#000" size={20} />
-                <Text style={styles.saveBtnText}>SALVA MODIFICHE</Text>
+                <Text style={styles.saveBtnText}>CONFERMA MODIFICHE</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -198,10 +229,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   calendarHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 25, paddingTop: 20 },
-  navBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
+  navBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
   dateDisplay: { alignItems: 'center' },
-  dateMain: { color: '#fff', fontSize: 20, fontWeight: '900' },
-  dateSub: { color: '#00cec9', fontSize: 10, fontWeight: '900' },
+  dateMain: { color: '#fff', fontSize: 22, fontWeight: '900' },
+  dateSub: { color: '#00cec9', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   summaryCard: { flexDirection: 'row', justifyContent: 'space-around', backgroundColor: '#111', margin: 20, padding: 20, borderRadius: 25, borderWidth: 1, borderColor: '#333' },
   summaryItem: { alignItems: 'center' },
   summaryVal: { color: '#fff', fontSize: 18, fontWeight: '900' },
@@ -212,14 +243,14 @@ const styles = StyleSheet.create({
   rightActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   kcalBox: { backgroundColor: '#00cec920', padding: 8, borderRadius: 10 },
   kcalText: { color: '#00cec9', fontWeight: '900', fontSize: 12 },
-  actionBtn: { padding: 5 },
+  actionBtn: { padding: 8 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#111', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, borderWidth: 1, borderColor: '#333', maxHeight: '90%' },
+  modalContent: { backgroundColor: '#111', borderTopLeftRadius: 35, borderTopRightRadius: 35, padding: 25, borderWidth: 1, borderColor: '#333', maxHeight: '90%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20, alignItems: 'center' },
   modalTitle: { color: '#fff', fontSize: 22, fontWeight: '900' },
   inputLabel: { color: '#00cec9', fontSize: 10, fontWeight: '900', marginBottom: 8, marginTop: 15, letterSpacing: 1 },
-  input: { backgroundColor: '#222', borderRadius: 15, padding: 15, color: '#fff', fontWeight: '700', fontSize: 16 },
+  input: { backgroundColor: '#1a1a1a', borderRadius: 15, padding: 15, color: '#fff', fontWeight: '700', fontSize: 16, borderWidth: 1, borderColor: '#333' },
   inputRow: { flexDirection: 'row', gap: 0 },
   saveBtn: { backgroundColor: '#00cec9', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 18, borderRadius: 20, marginTop: 30, gap: 10 },
-  saveBtnText: { color: '#000', fontWeight: '900', fontSize: 14 }
+  saveBtnText: { color: '#000', fontWeight: '900', fontSize: 14 },
 });

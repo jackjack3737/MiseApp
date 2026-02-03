@@ -1,8 +1,9 @@
 import { StyleSheet, View, Text, FlatList, Image, TouchableOpacity, ActivityIndicator, Dimensions, StatusBar, TextInput } from 'react-native';
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../src/lib/supabase';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Clock, Flame, ArrowLeft, Search, Filter, WheatOff, MilkOff, Leaf, Activity } from 'lucide-react-native';
+import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Clock, Flame, ArrowLeft, Search, WheatOff, MilkOff, Leaf, Zap } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 
@@ -11,14 +12,16 @@ const PROTOCOL_THEMES = {
   'Carnivore': { color: '#e17055' },
   'Paleo': { color: '#00b894' },
   'LowCarb': { color: '#0984e3' },
+  'LiveBetter': { color: '#00cec9' },
 };
 
 export default function ExploreScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams(); 
-  const protocol = params.protocol || 'Keto';
-  const maxKcal = params.kcal ? parseInt(params.kcal) : 3500;
   
+  const [protocol, setProtocol] = useState(params.protocol || 'Keto');
+  const [maxKcal, setMaxKcal] = useState(2000); 
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
@@ -26,33 +29,54 @@ export default function ExploreScreen() {
   const theme = PROTOCOL_THEMES[protocol] || PROTOCOL_THEMES['Keto'];
 
   useEffect(() => {
+    const loadUserSettings = async () => {
+      try {
+        const saved = await AsyncStorage.getItem('@user_profile');
+        if (saved) {
+          const p = JSON.parse(saved);
+          if (p.targetCalories) setMaxKcal(parseInt(p.targetCalories));
+          if (params.protocol) {
+            setProtocol(params.protocol);
+          } else if (p.protocol) {
+            setProtocol(p.protocol);
+          }
+        }
+      } catch (e) {
+        console.error("Errore caricamento target in Explore", e);
+      }
+    };
+
+    const unsubscribe = navigation.addListener('focus', loadUserSettings);
+    loadUserSettings();
+    return unsubscribe;
+  }, [navigation, params.protocol]);
+
+  useEffect(() => {
     fetchRecipes();
-  }, [protocol, searchText]);
+  }, [protocol, searchText, maxKcal]);
 
   async function fetchRecipes() {
     setLoading(true);
     try {
-      // Selezioniamo esplicitamente i campi per evitare errori di mapping
       let query = supabase
         .from('recipes')
-        .select('id, title, image_url, kcal, proteins, carbs, fats, total_time, tags')
+        .select('*')
         .lte('kcal', maxKcal)
         .order('created_at', { ascending: false });
 
-      // LOGICA DI FILTRO BIO-HACKER
-      if (searchText.length <= 2) {
-        // Se non cerca, mostriamo i piatti "vetrina" del protocollo scelto
-        if (protocol) query = query.contains('tags', [protocol]);
-        query = query.not('image_url', 'is', null); 
-      } 
-      else {
-        // Ricerca libera in tutto il database
+      if (searchText.length > 2) {
         query = query.ilike('title', `%${searchText}%`);
+      } else {
+        if (protocol === 'LiveBetter') {
+          query = query.contains('tags', ['LiveBetter']);
+        } else if (protocol) {
+          query = query.contains('tags', [protocol]);
+        }
+        query = query.not('image_url', 'is', null);
       }
 
       const { data, error } = await query.limit(50);
       if (!error) setRecipes(data || []);
-      else console.error("Errore query:", error.message);
     } catch (err) {
       console.error(err);
     } finally {
@@ -64,23 +88,23 @@ export default function ExploreScreen() {
     if (!tags) return null;
     return (
       <View style={styles.badgesContainer}>
+        {tags.includes('LiveBetter') && (
+          <View style={[styles.miniBadge, { borderColor: '#00cec9' }]}>
+            <Zap size={10} color="#00cec9" />
+            <Text style={[styles.miniBadgeText, { color: '#00cec9' }]}>LIVE BETTER</Text>
+          </View>
+        )}
         {tags.includes('GlutenFree') && (
-            <View style={[styles.miniBadge, { borderColor: '#fab1a0' }]}>
-                <WheatOff size={10} color="#fab1a0" />
-                <Text style={[styles.miniBadgeText, { color: '#fab1a0' }]}>NO GLUTINE</Text>
-            </View>
+          <View style={[styles.miniBadge, { borderColor: '#fab1a0' }]}>
+            <WheatOff size={10} color="#fab1a0" />
+            <Text style={[styles.miniBadgeText, { color: '#fab1a0' }]}>NO GLUTINE</Text>
+          </View>
         )}
         {tags.includes('DairyFree') && (
-            <View style={[styles.miniBadge, { borderColor: '#74b9ff' }]}>
-                <MilkOff size={10} color="#74b9ff" />
-                <Text style={[styles.miniBadgeText, { color: '#74b9ff' }]}>NO LATTOSIO</Text>
-            </View>
-        )}
-        {(tags.includes('Vegetarian') || tags.includes('Veg')) && (
-            <View style={[styles.miniBadge, { borderColor: '#55efc4' }]}>
-                <Leaf size={10} color="#55efc4" />
-                <Text style={[styles.miniBadgeText, { color: '#55efc4' }]}>VEG</Text>
-            </View>
+          <View style={[styles.miniBadge, { borderColor: '#74b9ff' }]}>
+            <MilkOff size={10} color="#74b9ff" />
+            <Text style={[styles.miniBadgeText, { color: '#74b9ff' }]}>NO LATTOSIO</Text>
+          </View>
         )}
       </View>
     );
@@ -89,10 +113,7 @@ export default function ExploreScreen() {
   const renderRecipeItem = ({ item }) => (
     <TouchableOpacity 
       style={styles.card} 
-      onPress={() => router.push({
-        pathname: "/recipe-detail",
-        params: { id: item.id }
-      })}
+      onPress={() => router.push(`/recipe-detail?id=${item.id}`)}
       activeOpacity={0.9}
     >
       <Image source={{ uri: item.image_url }} style={styles.image} resizeMode="cover" />
@@ -106,7 +127,7 @@ export default function ExploreScreen() {
             <View style={styles.metaLeft}>
                 <View style={styles.metaItem}>
                     <Clock size={14} color="#bdc3c7" />
-                    <Text style={styles.metaText}>{item.total_time} min</Text>
+                    <Text style={styles.metaText}>{item.total_time || 20} min</Text>
                 </View>
                 <View style={styles.metaItem}>
                     <Flame size={14} color={theme.color} />
@@ -138,8 +159,8 @@ export default function ExploreScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <ArrowLeft size={24} color="#fff" />
         </TouchableOpacity>
-        <View style={{flex: 1, marginLeft: 15}}>
-            <Text style={[styles.headerSubtitle, { color: theme.color }]}>PIANO NUTRIZIONALE</Text>
+        <View style={styles.headerTitleGroup}>
+            <Text style={[styles.headerSubtitle, { color: theme.color }]}>TARGET GIORNALIERO</Text>
             <Text style={styles.headerTitle}>{protocol.toUpperCase()}</Text>
         </View>
         <View style={[styles.infoBox, { borderColor: theme.color }]}>
@@ -148,16 +169,28 @@ export default function ExploreScreen() {
       </View>
 
       <View style={styles.searchContainer}>
-        <View style={styles.searchBar}>
-            <Search size={20} color="#636e72" />
-            <TextInput 
-                placeholder={`Cerca in ${protocol}...`} 
-                placeholderTextColor="#636e72"
-                style={styles.searchInput}
-                value={searchText}
-                onChangeText={setSearchText}
-                autoCorrect={false}
-            />
+        <View style={styles.searchRow}>
+            <View style={[styles.searchBar, protocol === 'LiveBetter' && styles.searchBarLive]}>
+                <Search size={20} color="#636e72" />
+                <TextInput 
+                    placeholder={`Cerca in ${protocol}...`} 
+                    placeholderTextColor="#636e72"
+                    style={styles.searchInput}
+                    value={searchText}
+                    onChangeText={setSearchText}
+                />
+            </View>
+
+            {/* TASTO LIVE BETTER CON TESTO ESTESO */}
+            <TouchableOpacity 
+              style={[styles.liveBetterBtn, protocol === 'LiveBetter' && styles.liveBetterBtnActive]}
+              onPress={() => setProtocol(protocol === 'LiveBetter' ? 'Keto' : 'LiveBetter')}
+            >
+              <Zap size={16} color={protocol === 'LiveBetter' ? '#000' : '#00cec9'} />
+              <Text style={[styles.liveBetterBtnText, protocol === 'LiveBetter' && { color: '#000' }]}>
+                LIVE BETTER
+              </Text>
+            </TouchableOpacity>
         </View>
       </View>
 
@@ -168,12 +201,12 @@ export default function ExploreScreen() {
           data={recipes}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderRecipeItem}
-          contentContainerStyle={{ padding: 20, paddingBottom: 100 }}
+          contentContainerStyle={{ padding: 20, paddingBottom: 120 }}
           ItemSeparatorComponent={() => <View style={{height: 25}} />}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.center}>
-                <Text style={{color:'#636e72', marginTop: 50}}>Nessuna ricetta trovata.</Text>
+                <Text style={{color:'#636e72'}}>Nessuna ricetta trovata.</Text>
             </View>
           }
         />
@@ -185,28 +218,34 @@ export default function ExploreScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 20 },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 20, justifyContent: 'space-between' },
   backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-  headerSubtitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1.5 },
+  headerTitleGroup: { flex: 1, marginLeft: 15 },
+  headerSubtitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 2 },
   headerTitle: { color: '#fff', fontSize: 26, fontWeight: '900' },
-  infoBox: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1, backgroundColor: '#111' },
-  infoText: { fontWeight: '900', fontSize: 12 },
+  infoBox: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 12, borderWidth: 1, backgroundColor: '#000' },
+  infoText: { fontWeight: '900', fontSize: 13 },
   searchContainer: { paddingHorizontal: 20, marginBottom: 15 },
-  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderRadius: 18, paddingHorizontal: 15, height: 55, borderWidth: 1, borderColor: '#333' },
+  searchRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderRadius: 20, paddingHorizontal: 15, height: 60, borderWidth: 1, borderColor: '#222' },
+  searchBarLive: { borderColor: '#00cec9' },
   searchInput: { flex: 1, color: '#fff', marginLeft: 10, fontSize: 16, fontWeight: '600' },
-  card: { height: 280, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
+  liveBetterBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 15, height: 60, borderRadius: 20, backgroundColor: '#111', borderWidth: 1, borderColor: '#00cec9' },
+  liveBetterBtnActive: { backgroundColor: '#00cec9' },
+  liveBetterBtnText: { color: '#00cec9', fontSize: 11, fontWeight: '900', letterSpacing: 0.5 },
+  card: { height: 300, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
   image: { width: '100%', height: '100%' },
   cardOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  cardContent: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 20 },
-  badgesContainer: { flexDirection: 'row', gap: 6, marginBottom: 10 },
-  miniBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, backgroundColor: 'rgba(0,0,0,0.7)' },
+  cardContent: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 25 },
+  badgesContainer: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  miniBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, backgroundColor: 'rgba(0,0,0,0.7)' },
   miniBadgeText: { fontSize: 9, fontWeight: '900' },
-  cardTitle: { color: '#fff', fontSize: 24, fontWeight: '900', marginBottom: 12, lineHeight: 28 },
+  cardTitle: { color: '#fff', fontSize: 24, fontWeight: '900', marginBottom: 15 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   metaLeft: { flexDirection: 'row', gap: 12 },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   metaText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   macroPills: { flexDirection: 'row', gap: 6 },
-  pill: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8, minWidth: 45, alignItems: 'center' },
-  pillText: { fontSize: 10, fontWeight: '900' }
+  pill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, minWidth: 45, alignItems: 'center' },
+  pillText: { fontSize: 11, fontWeight: '900' }
 });
