@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text, ScrollView, Image, TouchableOpacity, Dimensions, StatusBar, ActivityIndicator, Vibration, Modal } from 'react-native';
+import { StyleSheet, View, Text, ScrollView, Image, TouchableOpacity, Dimensions, StatusBar, ActivityIndicator, Vibration, Modal, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../src/lib/supabase';
 import { ArrowLeft, Clock, Flame, Play, Pause, RotateCcw, Activity, WheatOff, MilkOff, Check, Utensils, X, Plus, Minus, ShoppingCart } from 'lucide-react-native';
@@ -15,16 +15,15 @@ const getMealByTime = () => {
     return 'Cena';
 };
 
-// --- SMART SCALER FUNCTION (Il Cervello Matematico) ---
+// --- SMART SCALER FUNCTION ---
 const scaleIngredients = (text, multiplier) => {
     if (!text) return "";
     if (multiplier === 1) return text;
 
-    // Cerca numeri seguiti da unità (es. 200g, 1.5kg, 10 ml)
-    return text.replace(/(\d+(?:[.,]\d+)?)\s*(g|ml|kg|l|oz|lb|cucchiai|cucchiaini)/gi, (match, number, unit) => {
+    return text.replace(/(\d+(?:[.,]\d+)?)\s*(g|ml|kg|l|oz|lb|cucchiai|cucchiaini|cm|mm)/gi, (match, number, unit) => {
         const originalValue = parseFloat(number.replace(',', '.'));
         const newValue = Math.round(originalValue * multiplier);
-        return `${newValue}${unit}`; // Ricostruisce la stringa: "300g"
+        return `${newValue}${unit}`; 
     });
 };
 
@@ -92,19 +91,15 @@ export default function RecipeDetailScreen() {
   const [recipe, setRecipe] = useState(null);
   const [steps, setSteps] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  // TRACKING & SCALING
   const [modalVisible, setModalVisible] = useState(false);
   const [multiplier, setMultiplier] = useState(1);
   const [selectedMeal, setSelectedMeal] = useState(getMealByTime());
   const [logging, setLogging] = useState(false);
-
-  // TESTO INGREDIENTI SCALATO
+  const [addingToCart, setAddingToCart] = useState(false);
   const [scaledDescription, setScaledDescription] = useState("");
 
   useEffect(() => { fetchRecipeDetails(); }, [id]);
 
-  // Aggiorna il testo scalato quando cambia il multiplier o la ricetta
   useEffect(() => {
     if (recipe?.description) {
         setScaledDescription(scaleIngredients(recipe.description, multiplier));
@@ -118,39 +113,66 @@ export default function RecipeDetailScreen() {
       const { data: stepsData, error: stepsError } = await supabase.from('steps').select('*').eq('recipe_id', id).order('step_number', { ascending: true });
       if (stepsError) throw stepsError;
       setRecipe(recipeData);
-      setSteps(stepsData);
+      setSteps(stepsData || []);
     } catch (e) { console.error(e); } finally { setLoading(false); }
   }
 
   async function handleTrackMeal() {
     setLogging(true);
     try {
-        const finalKcal = Math.round(recipe.kcal * multiplier);
-        const finalCarbs = Math.round(recipe.carbs * multiplier);
-        const finalProteins = Math.round(recipe.proteins * multiplier);
-        const finalFats = Math.round(recipe.fats * multiplier);
-
-        const { error } = await supabase.from('daily_logs').insert({
-            meal_type: selectedMeal,
-            food_name: `${recipe.title} (${multiplier}x)`, // Aggiungo info porzione nel nome
-            kcal: finalKcal,
-            carbs: finalCarbs,
-            proteins: finalProteins,
-            fats: finalFats,
+        const payload = {
+            food_name: `${recipe.title} (${multiplier}x)`, 
+            kcal: Math.round(recipe.kcal * multiplier),
+            carbs: Math.round(recipe.carbs * multiplier),
+            proteins: Math.round(recipe.proteins * multiplier),
+            fats: Math.round(recipe.fats * multiplier),
+            meal_type: selectedMeal, 
             date: new Date().toISOString().split('T')[0]
-        });
+        };
+
+        const { error } = await supabase.from('daily_logs').insert([payload]);
 
         if (error) throw error;
+
         setModalVisible(false);
+        Alert.alert("Successo", "Pasto tracciato correttamente!");
         router.push('/(tabs)/tracker');
 
     } catch (error) {
         console.error("Errore salvataggio:", error);
-        alert("Errore nel salvataggio del pasto.");
+        Alert.alert("Errore", `Impossibile salvare il pasto.`);
     } finally {
         setLogging(false);
     }
   }
+
+  async function handleAddToShoppingList() {
+  setAddingToCart(true);
+  try {
+    // Se il Miner ha fatto il suo lavoro, abbiamo già l'array pronto
+    const list = recipe.ingredients_list; // Array di stringhe o oggetti dal DB
+
+    if (!list || list.length === 0) {
+      Alert.alert("Info", "Nessuna lista ingredienti strutturata trovata.");
+      return;
+    }
+
+    const itemsToInsert = list.map((ingredient: string) => ({
+      name: ingredient,
+      category: recipe.title, 
+      is_bought: false
+    }));
+
+    const { error } = await supabase.from('shopping_list').insert(itemsToInsert);
+
+    if (error) throw error;
+    Alert.alert("🛒 Carrello", "Tutti gli ingredienti sono stati aggiunti correttamente!");
+  } catch (e) {
+    Alert.alert("Errore", "Impossibile caricare la lista dal database.");
+  } finally {
+    setAddingToCart(false);
+  }
+}
 
   const adjustMultiplier = (delta) => {
       setMultiplier(prev => Math.max(0.25, prev + delta));
@@ -174,13 +196,10 @@ export default function RecipeDetailScreen() {
       <StatusBar barStyle="light-content" />
       <ScrollView contentContainerStyle={{ paddingBottom: 150 }} showsVerticalScrollIndicator={false}>
         
-        {/* HERO IMAGE */}
         <View style={styles.imageContainer}>
             <Image source={{ uri: recipe.image_url }} style={styles.image} resizeMode="cover" />
             <View style={styles.darkOverlay} />
-            <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                <ArrowLeft size={24} color="#fff" />
-            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}><ArrowLeft size={24} color="#fff" /></TouchableOpacity>
             <View style={styles.headerContent}>
                 {renderBadges(recipe.tags)}
                 <Text style={styles.title}>{recipe.title}</Text>
@@ -191,24 +210,26 @@ export default function RecipeDetailScreen() {
             </View>
         </View>
 
-        {/* MACRO */}
         <View style={styles.macroStrip}>
-            <View style={styles.macroItem}><Text style={[styles.macroVal, {color:'#fdcb6e'}]}>{recipe.carbs}g</Text><Text style={styles.macroLabel}>CARBS</Text></View>
+            <View style={styles.macroItem}><Text style={[styles.macroVal, {color:'#fdcb6e'}]}>{Math.round(recipe.carbs * multiplier)}g</Text><Text style={styles.macroLabel}>CARBS</Text></View>
             <View style={styles.macroDivider} />
-            <View style={styles.macroItem}><Text style={[styles.macroVal, {color:'#74b9ff'}]}>{recipe.proteins}g</Text><Text style={styles.macroLabel}>PRO</Text></View>
+            <View style={styles.macroItem}><Text style={[styles.macroVal, {color:'#74b9ff'}]}>{Math.round(recipe.proteins * multiplier)}g</Text><Text style={styles.macroLabel}>PRO</Text></View>
             <View style={styles.macroDivider} />
-            <View style={styles.macroItem}><Text style={[styles.macroVal, {color:'#ff7675'}]}>{recipe.fats}g</Text><Text style={styles.macroLabel}>FATS</Text></View>
+            <View style={styles.macroItem}><Text style={[styles.macroVal, {color:'#ff7675'}]}>{Math.round(recipe.fats * multiplier)}g</Text><Text style={styles.macroLabel}>FATS</Text></View>
         </View>
 
-        {/* INGREDIENTI BASE (1x) */}
         <View style={styles.section}>
-            <Text style={styles.sectionTitle}>INGREDIENTI BASE</Text>
+            <View style={styles.rowBetween}>
+                <Text style={styles.sectionTitle}>INGREDIENTI BASE</Text>
+                <TouchableOpacity style={styles.cartBtnSmall} onPress={handleAddToShoppingList} disabled={addingToCart}>
+                    {addingToCart ? <ActivityIndicator size="small" color="#00cec9" /> : <ShoppingCart size={20} color="#00cec9" />}
+                </TouchableOpacity>
+            </View>
             <View style={styles.ingredientsCard}>
                 <Text style={styles.ingredientsText}>{recipe.description || "Nessuna descrizione."}</Text>
             </View>
         </View>
 
-        {/* STEPS */}
         <View style={styles.section}>
             <Text style={styles.sectionTitle}>GUIDA PASSO-PASSO</Text>
             {steps.map((step) => (
@@ -216,16 +237,16 @@ export default function RecipeDetailScreen() {
                     <View style={styles.stepHeader}>
                         <View style={styles.stepBadge}><Text style={styles.stepBadgeText}>{step.step_number}</Text></View>
                         <Text style={styles.stepHeaderLabel}>FASE {step.step_number}</Text>
+                        {step.tool && <View style={styles.toolBadge}><Text style={styles.toolText}>{step.tool.toUpperCase()}</Text></View>}
                     </View>
                     <Text style={styles.stepText}>{step.instruction}</Text>
-                    {(step.action_type === 'TIMER' || step.action_type === 'timer') && (
+                    {step.target_value && (step.action_type === 'TIMER' || step.action_type === 'timer' || step.action_type === 'COOK' || step.action_type === 'BAKE') && (
                         <StepTimer durationMinutes={step.target_value} label={step.tool || "Timer"} />
                     )}
                 </View>
             ))}
         </View>
 
-        {/* MICRO */}
         {recipe.micronutrients && (
            <View style={styles.microBox}>
               <View style={{flexDirection:'row', alignItems:'center', gap: 5, marginBottom:5}}>
@@ -235,13 +256,12 @@ export default function RecipeDetailScreen() {
               <Text style={styles.microText}>
                   {typeof recipe.micronutrients === 'object' 
                     ? `Ricco di: ${recipe.micronutrients.minerals?.join(', ')}, ${recipe.micronutrients.vitamins?.join(', ')}.\nBenefici: ${recipe.micronutrients.benefits}`
-                    : "Analisi dettagliata non disponibile."}
+                    : recipe.micronutrients}
               </Text>
            </View>
         )}
       </ScrollView>
 
-      {/* FAB */}
       <View style={styles.fabContainer}>
           <TouchableOpacity style={styles.fabButton} onPress={() => setModalVisible(true)} activeOpacity={0.9}>
               <View style={{alignItems:'flex-start'}}>
@@ -252,17 +272,13 @@ export default function RecipeDetailScreen() {
           </TouchableOpacity>
       </View>
 
-      {/* --- MODALE TRACKING & SCALING --- */}
       <Modal animationType="slide" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
-                
                 <View style={styles.modalHeader}>
                     <Text style={styles.modalTitle}>CALCOLATORE</Text>
                     <TouchableOpacity onPress={() => setModalVisible(false)}><X size={24} color="#636e72" /></TouchableOpacity>
                 </View>
-
-                {/* PORZIONI */}
                 <Text style={styles.label}>QUANTO MANGI / CUCINI?</Text>
                 <View style={styles.portionControl}>
                     <TouchableOpacity onPress={() => adjustMultiplier(-0.25)} style={styles.portionBtn}><Minus size={24} color="#fff" /></TouchableOpacity>
@@ -272,32 +288,24 @@ export default function RecipeDetailScreen() {
                     </View>
                     <TouchableOpacity onPress={() => adjustMultiplier(0.25)} style={styles.portionBtn}><Plus size={24} color="#fff" /></TouchableOpacity>
                 </View>
-
-                {/* INGREDIENTI DINAMICI (NEW) */}
                 <Text style={styles.label}>DOSI AGGIORNATE:</Text>
                 <View style={styles.scaledIngredientsBox}>
-                     <ScrollView nestedScrollEnabled style={{maxHeight: 100}}>
+                     <ScrollView nestedScrollEnabled style={{maxHeight: 120}}>
                         <Text style={styles.scaledText}>{scaledDescription}</Text>
                      </ScrollView>
                 </View>
-
-                {/* PREVIEW MACRO */}
                 <View style={styles.previewBox}>
                     <View style={styles.previewItem}><Text style={styles.previewVal}>{Math.round(recipe.kcal * multiplier)}</Text><Text style={styles.previewLabel}>KCAL</Text></View>
                     <View style={styles.previewItem}><Text style={styles.previewVal}>{Math.round(recipe.carbs * multiplier)}g</Text><Text style={styles.previewLabel}>CARB</Text></View>
                     <View style={styles.previewItem}><Text style={styles.previewVal}>{Math.round(recipe.proteins * multiplier)}g</Text><Text style={styles.previewLabel}>PRO</Text></View>
                     <View style={styles.previewItem}><Text style={styles.previewVal}>{Math.round(recipe.fats * multiplier)}g</Text><Text style={styles.previewLabel}>FAT</Text></View>
                 </View>
-
-                {/* CONFERMA */}
                 <TouchableOpacity style={styles.confirmBtn} onPress={handleTrackMeal} disabled={logging}>
                     {logging ? <ActivityIndicator color="#000" /> : <Text style={styles.confirmBtnText}>CONFERMA E TRACCIA</Text>}
                 </TouchableOpacity>
-
             </View>
         </View>
       </Modal>
-
     </View>
   );
 }
@@ -319,11 +327,13 @@ const styles = StyleSheet.create({
   metaText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   macroStrip: { flexDirection: 'row', backgroundColor: '#1e1e1e', padding: 20, marginHorizontal: 20, borderRadius: 15, marginTop: -30, elevation: 5, justifyContent: 'space-around', borderWidth: 1, borderColor: '#333' },
   macroItem: { alignItems: 'center' },
-  macroVal: { fontSize: 22, fontWeight: '900' },
+  macroVal: { fontSize: 22, fontWeight: '900', color: '#fff' },
   macroLabel: { color: '#636e72', fontSize: 10, fontWeight: '800', marginTop: 2 },
   macroDivider: { width: 1, backgroundColor: '#333', height: '80%' },
-  section: { padding: 20, paddingBottom: 0 },
-  sectionTitle: { color: '#636e72', fontSize: 12, fontWeight: '900', marginBottom: 15, letterSpacing: 1.5, textTransform: 'uppercase' },
+  section: { padding: 20 },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  cartBtnSmall: { padding: 10, backgroundColor: '#00cec915', borderRadius: 12, borderWidth: 1, borderColor: '#00cec9' },
+  sectionTitle: { color: '#636e72', fontSize: 12, fontWeight: '900', letterSpacing: 1.5, textTransform: 'uppercase' },
   ingredientsCard: { backgroundColor: '#111', padding: 20, borderRadius: 12, borderWidth: 1, borderColor: '#333' },
   ingredientsText: { color: '#dfe6e9', fontSize: 15, lineHeight: 24 },
   stepCard: { backgroundColor: '#1e1e1e', borderRadius: 16, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#333' },
@@ -331,6 +341,8 @@ const styles = StyleSheet.create({
   stepBadge: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#00cec9', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
   stepBadgeText: { color: '#000', fontWeight: '900', fontSize: 16 },
   stepHeaderLabel: { color: '#00cec9', fontWeight: '700', fontSize: 14, letterSpacing: 1 },
+  toolBadge: { backgroundColor: '#333', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  toolText: { color: '#636e72', fontSize: 9, fontWeight: '900' },
   stepText: { color: '#fff', fontSize: 17, lineHeight: 26, fontWeight: '400' },
   timerContainer: { backgroundColor: '#111', borderRadius: 12, padding: 15, marginTop: 20, borderWidth: 1, borderColor: '#fab1a0' },
   timerFinished: { borderColor: '#00b894', backgroundColor: 'rgba(0, 184, 148, 0.05)' },
@@ -353,8 +365,6 @@ const styles = StyleSheet.create({
   fabTitle: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
   fabSub: { color: '#2d3436', fontSize: 12, fontWeight: '600' },
   fabIconBox: { width: 45, height: 45, borderRadius: 22.5, backgroundColor: 'rgba(0,0,0,0.1)', justifyContent: 'center', alignItems: 'center' },
-  
-  // MODAL STYLES
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#1e1e1e', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, minHeight: 600 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 30 },
@@ -364,15 +374,12 @@ const styles = StyleSheet.create({
   portionBtn: { width: 50, height: 50, borderRadius: 15, backgroundColor: '#2d3436', justifyContent: 'center', alignItems: 'center' },
   portionValue: { color: '#fff', fontSize: 32, fontWeight: '900' },
   portionLabel: { color: '#636e72', fontSize: 10, fontWeight: '700' },
-  
-  // STILE INGREDIENTI SCALATI
   scaledIngredientsBox: { backgroundColor: '#111', borderRadius: 15, padding: 15, marginBottom: 30, borderWidth: 1, borderColor: '#00cec9' },
   scaledText: { color: '#00cec9', fontSize: 15, lineHeight: 22, fontWeight: '600' },
-
   previewBox: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 30, backgroundColor: 'rgba(255,255,255,0.05)', padding: 15, borderRadius: 15 },
   previewItem: { alignItems: 'center' },
   previewVal: { color: '#fff', fontSize: 18, fontWeight: '900' },
   previewLabel: { color: '#636e72', fontSize: 10, fontWeight: '700', marginTop: 2 },
-  confirmBtn: { backgroundColor: '#00cec9', height: 60, borderRadius: 20, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+  confirmBtn: { backgroundColor: '#00cec9', padding: 18, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   confirmBtnText: { color: '#000', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
 });
