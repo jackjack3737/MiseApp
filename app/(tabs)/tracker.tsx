@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, SafeAreaView, StatusBar, ActivityIndicator, Keyboard, Alert, RefreshControl, Modal } from 'react-native';
 import { supabase } from '../../src/lib/supabase'; 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
-import { Plus, Trash2, Flame, Utensils, ShieldCheck, BrainCircuit, X, Minus } from 'lucide-react-native';
+import { Plus, Trash2, Flame, Utensils, ShieldCheck, BrainCircuit, X, Minus, Search } from 'lucide-react-native';
 
 const MEALS = ['Colazione', 'Pranzo', 'Cena', 'Snack'];
 
@@ -19,21 +19,20 @@ export default function TrackerScreen() {
   const [inputText, setInputText] = useState('');
   const [selectedMeal, setSelectedMeal] = useState(getMealByTime());
   const [loading, setLoading] = useState(false);
-  const [logs, setLogs] = useState([]);
+  const [logs, setLogs] = useState<any[]>([]);
   const [todayTotals, setTodayTotals] = useState({ kcal: 0, c: 0, p: 0, f: 0 });
   const [refreshing, setRefreshing] = useState(false);
   const [targets, setTargets] = useState({ kcal: 2000, c: 30, p: 160, f: 140 });
 
   const [modalVisible, setModalVisible] = useState(false);
-  const [tempFood, setTempFood] = useState(null);
+  const [tempFood, setTempFood] = useState<any>(null);
   const [mode, setMode] = useState('GRAMS'); 
   const [currentWeight, setCurrentWeight] = useState(100); 
   const [currentMultiplier, setCurrentMultiplier] = useState(1); 
 
-  // --- CARICAMENTO E AUTO-PULIZIA DATI ---
+  // --- CARICAMENTO DATI ---
   const loadData = async () => {
     try {
-        // 1. Carica Target dal profilo locale
         const savedProfile = await AsyncStorage.getItem('@user_profile');
         if (savedProfile) {
             const p = JSON.parse(savedProfile);
@@ -45,20 +44,15 @@ export default function TrackerScreen() {
             });
         }
 
-        // 2. Carica Log Locali con Auto-Cleaning
         const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
         if (savedLogs) {
             let allLogs = JSON.parse(savedLogs);
             const today = new Date().toISOString().split('T')[0];
-
-            // LOGICA AUTO-CLEANING (30 GIORNI)
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
             const limitDate = thirtyDaysAgo.toISOString().split('T')[0];
-
             const cleanedLogs = allLogs.filter((log: any) => log.date >= limitDate);
             
-            // Se abbiamo rimosso log vecchi, aggiorniamo AsyncStorage
             if (cleanedLogs.length !== allLogs.length) {
                 await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(cleanedLogs));
             }
@@ -77,7 +71,7 @@ export default function TrackerScreen() {
 
   const onRefresh = async () => { setRefreshing(true); await loadData(); setRefreshing(false); };
 
-  const calculateTotals = (data) => {
+  const calculateTotals = (data: any[]) => {
     const totals = data.reduce((acc, item) => ({
         kcal: acc.kcal + (item.kcal || 0),
         c: acc.c + (item.carbs || 0),
@@ -87,36 +81,51 @@ export default function TrackerScreen() {
     setTodayTotals(totals);
   };
 
+  // --- 🔥 FUNZIONE RICERCA (SOLO AI - BYPASS DATABASE) ---
   async function searchFood() {
     if (!inputText.trim()) return;
     setLoading(true);
     Keyboard.dismiss();
 
     try {
+        console.log("🚀 Cerco direttamente con l'AI: ", inputText);
         let foodData = null;
-        const { data: dbRecipe } = await supabase.from('recipes').select('*').ilike('title', `%${inputText}%`).limit(1).maybeSingle();
 
-        if (dbRecipe) {
-            foodData = { name: dbRecipe.title, kcal: dbRecipe.kcal, c: dbRecipe.carbs, p: dbRecipe.proteins, f: dbRecipe.fats, weight_g: null };
-            setMode('PORTIONS');
-            setCurrentMultiplier(1);
-        } else {
-            const { data, error } = await supabase.functions.invoke('analyze-meal', { body: { query: inputText } });
-            if (error) throw new Error("AI Error");
-            foodData = data;
-            setMode('GRAMS');
-            setCurrentWeight(data.weight_g || 100); 
+        // NOTA: Ho commentato la ricerca nel DB locale per forzare Gemini
+        /*
+        const { data: dbRecipe } = await supabase.from('recipes').select('*').ilike('title', `%${inputText}%`).maybeSingle();
+        if (dbRecipe) { ... }
+        */
+
+        // CHIAMATA EDGE FUNCTION
+        const { data, error } = await supabase.functions.invoke('analyze-meal', {
+            body: { query: inputText }
+        });
+
+        if (error) {
+            console.error("❌ Errore Edge Function:", error);
+            throw new Error(error.message || "Errore Server");
         }
+
+        console.log("🤖 Risposta AI:", data);
+        
+        // Assegno i dati
+        foodData = data;
+        setMode('GRAMS');
+        setCurrentWeight(data.weight_g || 100);
 
         if (foodData) {
             setTempFood(foodData);
             setModalVisible(true);
         }
+
     } catch (error) {
-        Alert.alert("Errore", "Impossibile trovare il cibo.");
+        console.log(error);
+        Alert.alert("Errore", "L'AI non risponde. Riprova.");
     } finally { setLoading(false); }
   }
 
+  // --- RESTO IDENTICO ---
   const getFinalValues = () => {
       if (!tempFood) return { k: 0, c: 0, p: 0, f: 0, label: "" };
       if (mode === 'PORTIONS') {
@@ -139,11 +148,11 @@ export default function TrackerScreen() {
       }
   };
 
-  const adjustAmount = (delta) => {
+  const adjustAmount = (delta: number) => {
       if (mode === 'PORTIONS') {
           setCurrentMultiplier(prev => Math.max(0.25, prev + delta));
       } else {
-          setCurrentWeight(prev => Math.max(10, prev + (delta * 40))); 
+          setCurrentWeight(prev => Math.max(10, prev + (delta * 10))); 
       }
   };
 
@@ -164,13 +173,10 @@ export default function TrackerScreen() {
             date: today,
             label: final.label
         };
-
         const existingLogsJson = await AsyncStorage.getItem('@user_daily_logs');
         const existingLogs = existingLogsJson ? JSON.parse(existingLogsJson) : [];
         const updatedLogs = [newEntry, ...existingLogs];
-
         await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(updatedLogs));
-
         setModalVisible(false);
         setTempFood(null);
         setInputText('');
@@ -178,19 +184,19 @@ export default function TrackerScreen() {
     } catch (e) { Alert.alert("Errore", "Salvataggio fallito."); }
   }
 
-  async function deleteLog(id) {
+  async function deleteLog(id: string) {
     try {
         const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
         if (savedLogs) {
             const allLogs = JSON.parse(savedLogs);
-            const filtered = allLogs.filter(log => log.id !== id);
+            const filtered = allLogs.filter((log: any) => log.id !== id);
             await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(filtered));
             loadData();
         }
     } catch (e) { Alert.alert("Errore", "Impossibile eliminare."); }
   }
 
-  const ProgressBar = ({ label, current, max, color }) => {
+  const ProgressBar = ({ label, current, max, color }: any) => {
     const progress = Math.min(current / max, 1) * 100;
     return (
         <View style={styles.progressRow}>
@@ -238,18 +244,18 @@ export default function TrackerScreen() {
             <View style={styles.inputWrapper}>
                 <TextInput 
                     style={styles.textInput}
-                    placeholder="Es. 'Omelette 3 uova'..."
+                    placeholder="Es. 'Big Mac', 'Pizza', 'Sgarro'..."
                     placeholderTextColor="#636e72"
                     value={inputText}
                     onChangeText={setInputText}
                 />
                 <TouchableOpacity style={[styles.sendBtn, loading && {opacity: 0.5}]} onPress={searchFood} disabled={loading}>
-                    {loading ? <ActivityIndicator color="#000" /> : <Plus size={28} color="#000" />}
+                    {loading ? <ActivityIndicator color="#000" /> : <Search size={28} color="#000" />}
                 </TouchableOpacity>
             </View>
             <View style={styles.securityBadge}>
                 <ShieldCheck size={12} color="#00cec9" />
-                <Text style={styles.hint}>I dati degli ultimi 30 giorni sono salvati solo sul tuo telefono</Text>
+                <Text style={styles.hint}>AI-Only Mode (DB Bypassed)</Text>
             </View>
         </View>
 
@@ -292,7 +298,7 @@ export default function TrackerScreen() {
                     <>
                         <Text style={styles.foodName}>{tempFood.name}</Text>
                         <View style={styles.portionControl}>
-                            <TouchableOpacity onPress={() => adjustAmount(-0.25)} style={styles.portionBtn}><Minus size={24} color="#fff" /></TouchableOpacity>
+                            <TouchableOpacity onPress={() => adjustAmount(-1)} style={styles.portionBtn}><Minus size={24} color="#fff" /></TouchableOpacity>
                             <View style={{alignItems:'center'}}>
                                 <Text style={styles.portionValue}>
                                     {mode === 'GRAMS' ? currentWeight : currentMultiplier}
@@ -300,7 +306,7 @@ export default function TrackerScreen() {
                                 </Text>
                                 <Text style={styles.portionLabel}>{mode === 'GRAMS' ? 'PESO' : 'PORZIONE'}</Text>
                             </View>
-                            <TouchableOpacity onPress={() => adjustAmount(0.25)} style={styles.portionBtn}><Plus size={24} color="#fff" /></TouchableOpacity>
+                            <TouchableOpacity onPress={() => adjustAmount(1)} style={styles.portionBtn}><Plus size={24} color="#fff" /></TouchableOpacity>
                         </View>
 
                         <View style={styles.previewBox}>

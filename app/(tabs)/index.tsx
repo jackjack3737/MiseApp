@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-// AGGIUNTO: Platform negli import per evitare il crash "Property 'Platform' doesn't exist"
-import { StyleSheet, Text, View, SafeAreaView, TouchableOpacity, ScrollView, StatusBar, TextInput, Keyboard, Dimensions, Platform } from 'react-native';
-import { useRouter } from 'expo-router';
-// AGGIUNTO: AsyncStorage per salvare i dati che hai inserito
+import { StyleSheet, Text, View, SafeAreaView, TouchableOpacity, ScrollView, StatusBar, TextInput, Dimensions, Platform, ActivityIndicator } from 'react-native';
+import { useRouter, Redirect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Zap, Beef, Leaf, ChevronRight, Edit2, Activity } from 'lucide-react-native';
 
@@ -43,18 +41,46 @@ const PROTOCOLS = [
   },
 ];
 
-// AGGIUNTO: export default obbligatorio per Expo Router
-export default function SetupScreen() {
+export default function IndexScreen() {
   const router = useRouter();
+  
+  // STATO PER IL CARICAMENTO INIZIALE
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasProfile, setHasProfile] = useState(false);
+
+  // STATI DEL SETUP
   const [selectedProtocol, setSelectedProtocol] = useState('Keto');
   const [kcal, setKcal] = useState(2000);
-
   const [carbs, setCarbs] = useState(25);   
   const [protein, setProtein] = useState(125); 
   const [fat, setFat] = useState(155);
 
   const isInternalUpdate = useRef(false);
 
+  // 1. CONTROLLO SE L'UTENTE ESISTE GIÀ
+  useEffect(() => {
+    checkUserProfile();
+  }, []);
+
+  const checkUserProfile = async () => {
+    try {
+      // ⚠️ ATTENZIONE: Se non vedi la schermata di setup, togli il commento alla riga sotto,
+      // salva, aspetta il reload, e poi rimetti il commento.
+      await AsyncStorage.clear(); 
+
+      const profileData = await AsyncStorage.getItem('@user_profile');
+      if (profileData) {
+        // Se esiste, impostiamo il flag per il redirect
+        setHasProfile(true);
+      }
+    } catch (e) {
+      console.log('Errore check profilo:', e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 2. CALCOLO MACRO AUTOMATICO
   useEffect(() => {
     if (isInternalUpdate.current) {
         isInternalUpdate.current = false;
@@ -75,6 +101,7 @@ export default function SetupScreen() {
     
   }, [selectedProtocol, kcal]);
 
+  // --- LOGICA HANDLERS ---
   const handleKcalChange = (text: string) => {
     const val = parseInt(text.replace(/[^0-9]/g, '')) || 0;
     setKcal(val);
@@ -86,11 +113,9 @@ export default function SetupScreen() {
     if (isNaN(newVal)) newVal = 0;
 
     const costPerGram = type === 'f' ? 9 : 4;
+    // ... Logica di bilanciamento ...
     const newKcalTaken = newVal * costPerGram;
-    
-    if (newKcalTaken > kcal) {
-        newVal = Math.floor(kcal / costPerGram);
-    }
+    if (newKcalTaken > kcal) newVal = Math.floor(kcal / costPerGram);
 
     const remainingKcal = kcal - (newVal * costPerGram);
     let currentP_cal = protein * 4;
@@ -103,15 +128,13 @@ export default function SetupScreen() {
         setCarbs(newVal);
         setProtein(Math.round((currentP_cal * ratio) / 4));
         setFat(Math.round((currentF_cal * ratio) / 9));
-    } 
-    else if (type === 'p') {
+    } else if (type === 'p') {
         const totalOther = currentC_cal + currentF_cal || 1;
         const ratio = remainingKcal / totalOther;
         setProtein(newVal);
         setCarbs(Math.round((currentC_cal * ratio) / 4));
         setFat(Math.round((currentF_cal * ratio) / 9));
-    } 
-    else if (type === 'f') {
+    } else if (type === 'f') {
         const totalOther = currentC_cal + currentP_cal || 1;
         const ratio = remainingKcal / totalOther;
         setFat(newVal);
@@ -125,7 +148,7 @@ export default function SetupScreen() {
     handleMacroChange(type, (currentVal + delta).toString());
   }
 
-  // AGGIUNTO: Funzione per salvare effettivamente su AsyncStorage
+  // 3. SALVATAGGIO E REDIRECT
   const handleGeneratePlan = async () => {
     try {
       const settings = {
@@ -137,21 +160,30 @@ export default function SetupScreen() {
       };
       await AsyncStorage.setItem('@user_profile', JSON.stringify(settings));
       
-      router.push({
-        pathname: '/(tabs)/explore',
-        params: { 
-            protocol: selectedProtocol, 
-            kcal: kcal,
-            targetCarbs: carbs,
-            targetProtein: protein,
-            targetFat: fat
-        }
-      });
+      // Usa 'replace' invece di 'push' così l'utente non può tornare indietro al setup
+      router.replace('/(tabs)/explore');
     } catch (e) {
       console.log("Errore salvataggio profilo", e);
     }
   };
 
+  // --- RENDER ---
+
+  // Se stiamo controllando, mostra spinner nero
+  if (isLoading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#00cec9" />
+      </View>
+    );
+  }
+
+  // Se l'utente esiste già, REDIRECT immediato
+  if (hasProfile) {
+    return <Redirect href="/(tabs)/explore" />;
+  }
+
+  // Altrimenti, mostra la UI di Setup
   const currentTotalKcal = (carbs * 4) + (protein * 4) + (fat * 9);
   const safeTotal = currentTotalKcal > 0 ? currentTotalKcal : 1;
   const carbsPct = Math.round(((carbs * 4) / safeTotal) * 100);
@@ -264,7 +296,7 @@ export default function SetupScreen() {
         </View>
       </ScrollView>
 
-      {/* POSIZIONAMENTO ALZATO PER DOCK ALTO */}
+      {/* Tasto Flottante */}
       <TouchableOpacity 
           style={styles.mainButton}
           onPress={handleGeneratePlan}
@@ -315,7 +347,7 @@ const styles = StyleSheet.create({
   barFill: { height: '100%', borderRadius: 3 },
   mainButton: { 
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 140 : 120, 
+    bottom: Platform.OS === 'ios' ? 40 : 20, 
     left: 20, 
     right: 20,
     backgroundColor: '#00cec9', 
