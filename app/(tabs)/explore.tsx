@@ -1,15 +1,25 @@
-import { StyleSheet, View, Text, FlatList, Image, TouchableOpacity, ActivityIndicator, Dimensions, StatusBar, TextInput } from 'react-native';
-import React, { useEffect, useState } from 'react';
+import { StyleSheet, View, Text, FlatList, TouchableOpacity, ActivityIndicator, Dimensions, StatusBar, TextInput, ScrollView } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../src/lib/supabase';
-import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
+import { useRouter, useLocalSearchParams, useNavigation, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// Sostituito SafeAreaView vecchio con quello nuovo per eliminare il warning
 import { SafeAreaView } from 'react-native-safe-area-context'; 
-import { Clock, Flame, User, Search, WheatOff, MilkOff, Zap } from 'lucide-react-native';
+import { User, Search, Zap, Beef, Fish, CookingPot, Leaf, Cookie, ChevronRight, Flame } from 'lucide-react-native';
 
-const { width } = Dimensions.get('window');
+// IMPORTA IL TUTORIAL
+import TutorialOverlay from '../../components/TutorialOverlay';
 
-const PROTOCOL_THEMES = {
+const IconMap: any = {
+  meat: <Beef size={22} color="#ff7675" />,
+  fish: <Fish size={22} color="#74b9ff" />,
+  eggs: <CookingPot size={22} color="#fdcb6e" />,
+  veggies: <Leaf size={22} color="#55efc4" />,
+  shake: <Zap size={22} color="#a29bfe" />,
+  snack: <Cookie size={22} color="#fab1a0" />,
+  default: <CookingPot size={22} color="#00cec9" />
+};
+
+const PROTOCOL_THEMES: any = {
   'Keto': { color: '#FFD700' },
   'Carnivore': { color: '#e17055' },
   'Paleo': { color: '#00b894' },
@@ -23,39 +33,60 @@ export default function ExploreScreen() {
   const params = useLocalSearchParams(); 
   
   const [protocol, setProtocol] = useState(params.protocol || 'Keto');
-  const [maxKcal, setMaxKcal] = useState(2000); 
+  const [userTargets, setUserTargets] = useState({ kcal: 2000 }); 
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
+  
+  // --- STATO TUTORIAL ---
+  const [showTutorial, setShowTutorial] = useState(false);
+
+  // --- STATO FILTRO LIVE BETTER ---
+  const [filterLiveBetter, setFilterLiveBetter] = useState(false);
+
+  // --- BIO-MIXER (Filtri di Ricerca) ---
+  const [mixer, setMixer] = useState({ 
+    maxP: 200, 
+    maxF: 200, 
+    maxC: 200 
+  });
 
   const theme = PROTOCOL_THEMES[protocol] || PROTOCOL_THEMES['Keto'];
 
-  useEffect(() => {
-    const loadUserSettings = async () => {
-      try {
-        const saved = await AsyncStorage.getItem('@user_profile');
-        if (saved) {
-          const p = JSON.parse(saved);
-          if (p.targetCalories) setMaxKcal(parseInt(p.targetCalories));
-          if (params.protocol) {
-            setProtocol(params.protocol);
-          } else if (p.protocol) {
-            setProtocol(p.protocol);
-          }
-        }
-      } catch (e) {
-        console.error("Errore caricamento target in Explore", e);
+  const loadData = async () => {
+    try {
+      const saved = await AsyncStorage.getItem('@user_profile');
+      if (saved) {
+        const p = JSON.parse(saved);
+        setUserTargets({ kcal: parseFloat(p.targetCalories) || 2000 });
+        setProtocol(params.protocol || p.protocol || 'Keto');
       }
-    };
+    } catch (e) { console.error(e); }
+  };
 
-    const unsubscribe = navigation.addListener('focus', loadUserSettings);
-    loadUserSettings();
-    return unsubscribe;
-  }, [navigation, params.protocol]);
+  // --- CONTROLLO TUTORIAL ---
+  const checkTutorial = async () => {
+    try {
+      const shouldShow = await AsyncStorage.getItem('@show_tutorial');
+      if (shouldShow === 'true') {
+        setShowTutorial(true);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleCloseTutorial = async () => {
+    setShowTutorial(false);
+    await AsyncStorage.removeItem('@show_tutorial'); // Non mostrarlo più
+  };
+
+  useFocusEffect(useCallback(() => { 
+    loadData(); 
+    checkTutorial(); // <-- CONTROLLA AD OGNI ACCESSO SE DEVE MOSTRARE IL TUTORIAL
+  }, [params.protocol]));
 
   useEffect(() => {
     fetchRecipes();
-  }, [protocol, searchText, maxKcal]);
+  }, [protocol, searchText, userTargets.kcal, mixer, filterLiveBetter]);
 
   async function fetchRecipes() {
     setLoading(true);
@@ -63,143 +94,134 @@ export default function ExploreScreen() {
       let query = supabase
         .from('recipes')
         .select('*')
-        .lte('kcal', maxKcal)
+        .lte('kcal', userTargets.kcal)
+        .lte('proteins', mixer.maxP)   
+        .lte('fats', mixer.maxF)       
+        .lte('carbs', mixer.maxC)      
         .order('created_at', { ascending: false });
 
       if (searchText.length > 2) {
         query = query.ilike('title', `%${searchText}%`);
       } else {
-        if (protocol === 'LiveBetter') {
-          query = query.contains('tags', ['LiveBetter']);
-        } else if (protocol) {
-          query = query.contains('tags', [protocol]);
+        const tagsRequired = [protocol];
+        if (filterLiveBetter) {
+            tagsRequired.push('LiveBetter');
         }
-        query = query.not('image_url', 'is', null);
+        query = query.contains('tags', tagsRequired);
       }
 
       const { data, error } = await query.limit(50);
-      if (!error) setRecipes(data || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+      
+      if (!error) {
+          setRecipes(data || []);
+      }
+    } catch (err) { console.error(err); } 
+    finally { setLoading(false); }
   }
 
-  const renderBadges = (tags) => {
-    if (!tags) return null;
+  const renderRecipeItem = ({ item }: any) => {
+    const isLiveBetter = item.tags?.includes('LiveBetter') || 
+                         (item.ingredients_list && JSON.stringify(item.ingredients_list).toLowerCase().includes('live better'));
+
     return (
-      <View style={styles.badgesContainer}>
-        {tags.includes('LiveBetter') && (
-          <View style={[styles.miniBadge, { borderColor: '#00cec9' }]}>
-            <Zap size={10} color="#00cec9" />
-            <Text style={[styles.miniBadgeText, { color: '#00cec9' }]}>LIVE BETTER</Text>
+      <TouchableOpacity 
+        style={[styles.compactCard, isLiveBetter && styles.cardLiveBetter]} 
+        onPress={() => router.push(`/recipe-detail?id=${item.id}`)}
+      >
+        <View style={styles.iconBox}>{IconMap[item.category_icon] || IconMap.default}</View>
+        <View style={styles.contentBox}>
+          <View style={styles.titleContainer}>
+              <Text style={styles.recipeTitle} numberOfLines={2}>{item.title}</Text>
+              
+              {isLiveBetter && (
+                <View style={styles.liveBetterBadge}>
+                    <Zap size={8} color="#000" fill="#000" />
+                    <Text style={styles.liveBetterText}>LIVE BETTER</Text>
+                </View>
+              )}
           </View>
-        )}
-        {tags.includes('GlutenFree') && (
-          <View style={[styles.miniBadge, { borderColor: '#fab1a0' }]}>
-            <WheatOff size={10} color="#fab1a0" />
-            <Text style={[styles.miniBadgeText, { color: '#fab1a0' }]}>NO GLUTINE</Text>
+          
+          <View style={styles.metaRow}>
+              <View style={styles.metaItem}>
+                  <Flame size={12} color={theme.color} />
+                  <Text style={[styles.metaText, {color: theme.color}]}>{item.kcal} kcal</Text>
+              </View>
+              <View style={styles.macroRow}>
+                  <Text style={styles.macroLabel}>P: {item.proteins}g</Text>
+                  <Text style={styles.macroLabel}>F: {item.fats}g</Text>
+                  <Text style={styles.macroLabel}>C: {item.carbs}g</Text>
+              </View>
           </View>
-        )}
-        {tags.includes('DairyFree') && (
-          <View style={[styles.miniBadge, { borderColor: '#74b9ff' }]}>
-            <MilkOff size={10} color="#74b9ff" />
-            <Text style={[styles.miniBadgeText, { color: '#74b9ff' }]}>NO LATTOSIO</Text>
-          </View>
-        )}
-      </View>
+        </View>
+        
+        <View style={styles.arrowBox}>
+            <ChevronRight size={18} color="#333" />
+        </View>
+      </TouchableOpacity>
     );
   };
 
-  const renderRecipeItem = ({ item }) => (
-    <TouchableOpacity 
-      style={styles.card} 
-      onPress={() => router.push(`/recipe-detail?id=${item.id}`)}
-      activeOpacity={0.9}
-    >
-      <Image source={{ uri: item.image_url }} style={styles.image} resizeMode="cover" />
-      <View style={styles.cardOverlay} />
-      
-      <View style={styles.cardContent}>
-        {renderBadges(item.tags)}
-        <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
-        
-        <View style={styles.cardMeta}>
-            <View style={styles.metaLeft}>
-                <View style={styles.metaItem}>
-                    <Clock size={14} color="#bdc3c7" />
-                    <Text style={styles.metaText}>{item.total_time || 20} min</Text>
-                </View>
-                <View style={styles.metaItem}>
-                    <Flame size={14} color={theme.color} />
-                    <Text style={[styles.metaText, {color: theme.color}]}>{item.kcal} kcal</Text>
-                </View>
-            </View>
-
-            <View style={styles.macroPills}>
-                <View style={[styles.pill, {backgroundColor: 'rgba(255, 118, 117, 0.2)'}]}>
-                    <Text style={[styles.pillText, {color:'#ff7675'}]}>F: {item.fats}g</Text>
-                </View>
-                <View style={[styles.pill, {backgroundColor: 'rgba(116, 185, 255, 0.2)'}]}>
-                    <Text style={[styles.pillText, {color:'#74b9ff'}]}>P: {item.proteins}g</Text>
-                </View>
-                <View style={[styles.pill, {backgroundColor: 'rgba(253, 203, 110, 0.2)'}]}>
-                    <Text style={[styles.pillText, {color:'#fdcb6e'}]}>C: {item.carbs}g</Text>
-                </View>
-            </View>
-        </View>
-      </View>
-    </TouchableOpacity>
+  const renderMixerLine = (title: string, options: number[], field: string, color: string) => (
+    <View style={styles.mixerLine}>
+        <Text style={[styles.mixerLineTitle, { color }]}>{title}</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {options.map(val => (
+                <TouchableOpacity 
+                    key={val}
+                    onPress={() => setMixer(prev => ({ 
+                      ...prev, 
+                      [field]: prev[field as keyof typeof mixer] === val ? 200 : val 
+                    }))}
+                    style={[styles.mixerOption, mixer[field as keyof typeof mixer] === val && { borderColor: color, backgroundColor: color + '15' }]}
+                >
+                    <Text style={[styles.mixerOptionText, mixer[field as keyof typeof mixer] === val && { color }]}>{val}g</Text>
+                </TouchableOpacity>
+            ))}
+        </ScrollView>
+    </View>
   );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar barStyle="light-content" />
-      
       <View style={styles.header}>
         <View style={styles.headerTitleGroup}>
             <Text style={[styles.headerSubtitle, { color: theme.color }]}>TARGET GIORNALIERO</Text>
             <Text style={styles.headerTitle}>{protocol.toUpperCase()}</Text>
         </View>
-
-        <View style={styles.headerActions}>
-            <View style={[styles.infoBox, { borderColor: theme.color }]}>
-                <Text style={[styles.infoText, { color: theme.color }]}>{maxKcal} kcal</Text>
-            </View>
-            
-            {/* TASTO PROFILO AGGIUNTO */}
-            <TouchableOpacity 
-              onPress={() => router.push('/profile')} 
-              style={styles.profileBtn}
-            >
-              <User size={22} color="#fff" />
-            </TouchableOpacity>
-        </View>
+        <TouchableOpacity onPress={() => router.push('/profile')} style={styles.profileBtn}>
+            <User size={22} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.searchContainer}>
-        <View style={styles.searchRow}>
-            <View style={[styles.searchBar, protocol === 'LiveBetter' && styles.searchBarLive]}>
-                <Search size={20} color="#636e72" />
-                <TextInput 
-                    placeholder={`Cerca in ${protocol}...`} 
-                    placeholderTextColor="#636e72"
-                    style={styles.searchInput}
-                    value={searchText}
-                    onChangeText={setSearchText}
-                />
-            </View>
+        <View style={styles.searchBar}>
+            <Search size={20} color="#b2bec3" />
+            <TextInput 
+                placeholder={`Cerca ricette ${protocol}...`} 
+                placeholderTextColor="#636e72"
+                style={styles.searchInput}
+                value={searchText}
+                onChangeText={setSearchText}
+            />
+        </View>
 
-            <TouchableOpacity 
-              style={[styles.liveBetterBtn, protocol === 'LiveBetter' && styles.liveBetterBtnActive]}
-              onPress={() => setProtocol(protocol === 'LiveBetter' ? 'Keto' : 'LiveBetter')}
-            >
-              <Zap size={16} color={protocol === 'LiveBetter' ? '#000' : '#00cec9'} />
-              <Text style={[styles.liveBetterBtnText, protocol === 'LiveBetter' && { color: '#000' }]}>
-                LIVE BETTER
-              </Text>
-            </TouchableOpacity>
+        <TouchableOpacity 
+            style={[styles.lbFilterBtn, filterLiveBetter && styles.lbFilterBtnActive]}
+            onPress={() => setFilterLiveBetter(!filterLiveBetter)}
+            activeOpacity={0.8}
+        >
+            <Zap size={14} color={filterLiveBetter ? "#000" : "#00cec9"} fill={filterLiveBetter ? "#000" : "transparent"} />
+            <Text style={[styles.lbFilterText, filterLiveBetter && {color: "#000"}]}>
+                FILTRA SOLO LIVE BETTER
+            </Text>
+            {filterLiveBetter && <View style={styles.dot} />}
+        </TouchableOpacity>
+
+        <View style={styles.mixerConsole}>
+            {renderMixerLine("MAX PROT", [20, 30, 40, 50], "maxP", "#ff7675")}
+            {renderMixerLine("MAX FATS", [10, 20, 30, 40, 50], "maxF", "#fdcb6e")}
+            {renderMixerLine("MAX CARBS", [5, 10, 15, 20, 30], "maxC", "#00cec9")}
         </View>
       </View>
 
@@ -210,16 +232,21 @@ export default function ExploreScreen() {
           data={recipes}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderRecipeItem}
-          contentContainerStyle={{ padding: 20, paddingBottom: 120 }}
-          ItemSeparatorComponent={() => <View style={{height: 25}} />}
-          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 150 }}
           ListEmptyComponent={
             <View style={styles.center}>
-                <Text style={{color:'#636e72'}}>Nessuna ricetta trovata.</Text>
+                <Text style={styles.emptyText}>NESSUNA RICETTA TROVATA</Text>
+                <Text style={styles.emptySubText}>
+                    {filterLiveBetter ? "Nessuna ricetta Live Better per questo protocollo." : "Prova a cambiare i filtri del mixer."}
+                </Text>
             </View>
           }
         />
       )}
+
+      {/* RENDERIZZA IL TUTORIAL SOPRA TUTTO SE ATTIVO */}
+      {showTutorial && <TutorialOverlay onClose={handleCloseTutorial} />}
+      
     </SafeAreaView>
   );
 }
@@ -227,51 +254,47 @@ export default function ExploreScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    paddingHorizontal: 20, 
-    paddingTop: 10, 
-    paddingBottom: 20, 
-    justifyContent: 'space-between' 
-  },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 25, paddingTop: 10, paddingBottom: 15 },
   headerTitleGroup: { flex: 1 },
-  headerSubtitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 2 },
-  headerTitle: { color: '#fff', fontSize: 28, fontWeight: '900' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  profileBtn: { 
-    width: 44, 
-    height: 44, 
-    borderRadius: 14, 
-    backgroundColor: '#111', 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    borderWidth: 1, 
-    borderColor: '#222' 
-  },
-  infoBox: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, backgroundColor: '#000' },
-  infoText: { fontWeight: '900', fontSize: 13 },
-  searchContainer: { paddingHorizontal: 20, marginBottom: 15 },
-  searchRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderRadius: 20, paddingHorizontal: 15, height: 60, borderWidth: 1, borderColor: '#222' },
-  searchBarLive: { borderColor: '#00cec9' },
-  searchInput: { flex: 1, color: '#fff', marginLeft: 10, fontSize: 16, fontWeight: '600' },
-  liveBetterBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 15, height: 60, borderRadius: 20, backgroundColor: '#111', borderWidth: 1, borderColor: '#00cec9' },
-  liveBetterBtnActive: { backgroundColor: '#00cec9' },
-  liveBetterBtnText: { color: '#00cec9', fontSize: 11, fontWeight: '900', letterSpacing: 0.5 },
-  card: { height: 300, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
-  image: { width: '100%', height: '100%' },
-  cardOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  cardContent: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 25 },
-  badgesContainer: { flexDirection: 'row', gap: 8, marginBottom: 10 },
-  miniBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, backgroundColor: 'rgba(0,0,0,0.7)' },
-  miniBadgeText: { fontSize: 9, fontWeight: '900' },
-  cardTitle: { color: '#fff', fontSize: 24, fontWeight: '900', marginBottom: 15 },
-  cardMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  metaLeft: { flexDirection: 'row', gap: 12 },
+  headerSubtitle: { fontSize: 9, fontWeight: '900', letterSpacing: 2, marginBottom: 4 },
+  headerTitle: { color: '#fff', fontSize: 26, fontWeight: '900' },
+  profileBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },
+  
+  searchContainer: { paddingHorizontal: 20, marginBottom: 10 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0a0a0a', borderRadius: 15, paddingHorizontal: 15, height: 50, borderWidth: 1, borderColor: '#111', marginBottom: 12 },
+  searchInput: { flex: 1, color: '#fff', marginLeft: 10, fontSize: 14 },
+  
+  lbFilterBtn: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', backgroundColor: '#00cec910', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#00cec9', marginBottom: 12, gap: 8 },
+  lbFilterBtnActive: { backgroundColor: '#00cec9', borderColor: '#00cec9' },
+  lbFilterText: { color: '#00cec9', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
+  dot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#000' },
+
+  mixerConsole: { backgroundColor: '#050505', padding: 15, borderRadius: 20, borderWidth: 1, borderColor: '#111', marginBottom: 5 },
+  mixerLine: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  mixerLineTitle: { width: 70, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  mixerOption: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, borderWidth: 1, borderColor: '#1a1a1a', marginRight: 8 },
+  mixerOptionText: { color: '#b2bec3', fontSize: 10, fontWeight: '700' }, 
+
+  compactCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#080808', padding: 16, borderRadius: 24, marginBottom: 12, borderWidth: 1, borderColor: '#111' },
+  cardLiveBetter: { borderColor: '#00cec930', backgroundColor: '#050a0a' },
+  
+  iconBox: { width: 50, height: 50, borderRadius: 16, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', marginRight: 15, borderWidth: 1, borderColor: '#1a1a1a' },
+  contentBox: { flex: 1, justifyContent: 'center' },
+  
+  titleContainer: { marginBottom: 6, alignItems: 'flex-start' },
+  recipeTitle: { color: '#fff', fontSize: 16, fontWeight: '800', marginBottom: 4, lineHeight: 22 },
+  
+  liveBetterBadge: { backgroundColor: '#00cec9', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2, alignSelf: 'flex-start' },
+  liveBetterText: { color: '#000', fontSize: 7, fontWeight: '900', letterSpacing: 0.5 },
+
+  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  metaText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  macroPills: { flexDirection: 'row', gap: 6 },
-  pill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, minWidth: 45, alignItems: 'center' },
-  pillText: { fontSize: 11, fontWeight: '900' }
+  metaText: { fontSize: 12, fontWeight: '900' },
+  
+  macroRow: { flexDirection: 'row', gap: 12 },
+  macroLabel: { color: '#b2bec3', fontSize: 11, fontWeight: '700' },
+  
+  arrowBox: { marginLeft: 10 },
+  emptyText: { color: '#b2bec3', fontWeight: '800', marginTop: 40 },
+  emptySubText: { color: '#636e72', fontSize: 12, marginTop: 10, textAlign:'center' }
 });

@@ -1,11 +1,26 @@
+import { useState } from 'react';
 import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
+import { StatusBar } from 'react-native'; // Usiamo quello nativo per controllo colore sfondo
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import SplashScreen from '../components/SplashScreen'; // Assicurati che il percorso sia corretto
 
 export default function RootLayout() {
+  const [isShowSplash, setIsShowSplash] = useState(true);
+
+  // 1. FASE SPLASH SCREEN
+  if (isShowSplash) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <SplashScreen onFinish={() => setIsShowSplash(false)} />
+      </SafeAreaProvider>
+    );
+  }
+
+  // 2. FASE APP (Navigazione)
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
       
       <Stack 
         screenOptions={{ 
@@ -13,13 +28,13 @@ export default function RootLayout() {
           contentStyle: { backgroundColor: '#000' } 
         }}
       >
-        {/* 1. NAVIGAZIONE PRINCIPALE (Contiene Explore, Advisor, Tracker, Spesa) */}
+        {/* 1. NAVIGAZIONE PRINCIPALE */}
         <Stack.Screen 
           name="(tabs)" 
           options={{ headerShown: false }} 
         />
         
-        {/* 2. PROFILO (Metabolic Mixer) - Apre un Modal sopra le Tabs */}
+        {/* 2. PROFILO (Metabolic Mixer) */}
         <Stack.Screen 
           name="profile" 
           options={{ 
@@ -32,7 +47,7 @@ export default function RootLayout() {
           }} 
         />
 
-        {/* 3. DETTAGLIO RICETTA - Transizione a scheda (Card) */}
+        {/* 3. DETTAGLIO RICETTA */}
         <Stack.Screen 
           name="recipe-detail" 
           options={{ 
@@ -40,8 +55,6 @@ export default function RootLayout() {
             headerShown: false 
           }} 
         />
-
-        {/* NOTA: Il file 'medical' è gestito ora da (tabs)/_layout.tsx */}
       </Stack>
     </SafeAreaProvider>
   );

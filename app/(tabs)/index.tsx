@@ -1,109 +1,64 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, TouchableOpacity, ScrollView, StatusBar, TextInput, Dimensions, Platform, ActivityIndicator } from 'react-native';
-import { useRouter, Redirect } from 'expo-router';
+import { StyleSheet, Text, View, TouchableOpacity, ScrollView, StatusBar, TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Zap, Beef, Leaf, ChevronRight, Edit2, Activity } from 'lucide-react-native';
-
-const { width } = Dimensions.get('window');
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'; 
+import { Zap, Beef, Leaf, Activity, ArrowRight, Edit2 } from 'lucide-react-native';
 
 const PROTOCOLS = [
-  { 
-    id: 'Keto', 
-    name: 'KETO', 
-    desc: 'Metabolic Efficiency.',
-    icon: <Zap size={24} color="#FFD700" />, 
-    color: '#FFD700',
-    defaultSplit: { c: 5, p: 25, f: 70 } 
-  },
-  { 
-    id: 'Carnivore', 
-    name: 'CARNIVORE', 
-    desc: 'Apex Predator.',
-    icon: <Beef size={24} color="#e17055" />,
-    color: '#e17055',
-    defaultSplit: { c: 0, p: 40, f: 60 }
-  },
-  { 
-    id: 'Paleo', 
-    name: 'PALEO', 
-    desc: 'Ancestral Health.',
-    icon: <Leaf size={24} color="#00b894" />, 
-    color: '#00b894',
-    defaultSplit: { c: 20, p: 30, f: 50 }
-  },
-  { 
-    id: 'LowCarb', 
-    name: 'LOW CARB', 
-    desc: 'Sustainable Balance.',
-    icon: <Activity size={24} color="#0984e3" />, 
-    color: '#0984e3',
-    defaultSplit: { c: 25, p: 35, f: 40 }
-  },
+  { id: 'Keto', name: 'KETO', icon: <Zap size={20} color="#FFD700" />, color: '#FFD700' },
+  { id: 'Carnivore', name: 'CARNIVORE', icon: <Beef size={20} color="#e17055" />, color: '#e17055' },
+  { id: 'Paleo', name: 'PALEO', icon: <Leaf size={20} color="#00b894" />, color: '#00b894' },
+  { id: 'LowCarb', name: 'LOW CARB', icon: <Activity size={20} color="#0984e3" />, color: '#0984e3' },
 ];
 
 export default function IndexScreen() {
   const router = useRouter();
-  
-  // STATO PER IL CARICAMENTO INIZIALE
   const [isLoading, setIsLoading] = useState(true);
-  const [hasProfile, setHasProfile] = useState(false);
-
-  // STATI DEL SETUP
+  const insets = useSafeAreaInsets();
+  
   const [selectedProtocol, setSelectedProtocol] = useState('Keto');
   const [kcal, setKcal] = useState(2000);
   const [carbs, setCarbs] = useState(25);   
   const [protein, setProtein] = useState(125); 
   const [fat, setFat] = useState(155);
-
   const isInternalUpdate = useRef(false);
 
-  // 1. CONTROLLO SE L'UTENTE ESISTE GIÀ
   useEffect(() => {
-    checkUserProfile();
+    const checkUser = async () => {
+      try {
+        const profile = await AsyncStorage.getItem('@user_profile');
+        if (profile) {
+            router.replace('/(tabs)/explore');
+        } else {
+            setIsLoading(false);
+            applyProtocolDefaults('Keto');
+        }
+      } catch (e) { setIsLoading(false); }
+    };
+    checkUser();
   }, []);
 
-  const checkUserProfile = async () => {
-    try {
-      // 🚨 ASSICURATI CHE QUESTA RIGA SOTTO SIA SEMPRE COMMENTATA:
-      // await AsyncStorage.clear(); 
-
-      const profileData = await AsyncStorage.getItem('@user_profile');
-      if (profileData) {
-        console.log("✅ Profilo trovato al boot!");
-        setHasProfile(true);
-      } else {
-        console.log("ℹ️ Nessun profilo, avvio setup.");
-      }
-    } catch (e) {
-      console.log('Errore check profilo:', e);
-    } finally {
-      // Un piccolo delay di 500ms evita "sfarfallii" e assicura la lettura
-      setTimeout(() => setIsLoading(false), 500);
+  const applyProtocolDefaults = (protoId: string) => {
+    setSelectedProtocol(protoId);
+    isInternalUpdate.current = true;
+    let newC = 20, newP = 150;
+    
+    switch(protoId) {
+        case 'Keto': newC = 25; newP = Math.round((kcal * 0.25) / 4); break;
+        case 'Carnivore': newC = 0; newP = Math.round((kcal * 0.40) / 4); break;
+        case 'Paleo': newC = 60; newP = Math.round((kcal * 0.30) / 4); break;
+        case 'LowCarb': newC = 100; newP = Math.round((kcal * 0.35) / 4); break;
     }
+    const newF = Math.max(0, Math.floor((kcal - (newP * 4) - (newC * 4)) / 9));
+    setCarbs(newC); setProtein(newP); setFat(newF);
+    setTimeout(() => { isInternalUpdate.current = false; }, 50);
   };
 
-  // 2. CALCOLO MACRO AUTOMATICO
   useEffect(() => {
-    if (isInternalUpdate.current) {
-        isInternalUpdate.current = false;
-        return;
-    }
+    if (!isInternalUpdate.current && !isLoading) applyProtocolDefaults(selectedProtocol);
+  }, [kcal]);
 
-    const proto = PROTOCOLS.find(p => p.id === selectedProtocol);
-    if (!proto) return;
-    
-    const split = proto.defaultSplit;
-    const newCarbs = Math.round((kcal * (split.c / 100)) / 4);
-    const newProtein = Math.round((kcal * (split.p / 100)) / 4);
-    const newFat = Math.round((kcal * (split.f / 100)) / 9);
-
-    if (newCarbs !== carbs) setCarbs(newCarbs);
-    if (newProtein !== protein) setProtein(newProtein);
-    if (newFat !== fat) setFat(newFat);
-    
-  }, [selectedProtocol, kcal]);
-
-  // --- LOGICA HANDLERS ---
   const handleKcalChange = (text: string) => {
     const val = parseInt(text.replace(/[^0-9]/g, '')) || 0;
     setKcal(val);
@@ -111,271 +66,170 @@ export default function IndexScreen() {
 
   const handleMacroChange = (type: string, newValueStr: string) => {
     isInternalUpdate.current = true;
-    let newVal = parseInt(newValueStr.replace(/[^0-9]/g, ''));
-    if (isNaN(newVal)) newVal = 0;
-
-    const costPerGram = type === 'f' ? 9 : 4;
-    const newKcalTaken = newVal * costPerGram;
-    if (newKcalTaken > kcal) newVal = Math.floor(kcal / costPerGram);
-
-    const remainingKcal = kcal - (newVal * costPerGram);
-    let currentP_cal = protein * 4;
-    let currentF_cal = fat * 9;
-    let currentC_cal = carbs * 4;
-
+    let newVal = parseInt(newValueStr.replace(/[^0-9]/g, '')) || 0;
+    
     if (type === 'c') {
-        const totalOther = currentP_cal + currentF_cal || 1;
-        const ratio = remainingKcal / totalOther;
         setCarbs(newVal);
-        setProtein(Math.round((currentP_cal * ratio) / 4));
-        setFat(Math.round((currentF_cal * ratio) / 9));
+        setFat(Math.max(0, Math.floor((kcal - (newVal * 4) - (protein * 4)) / 9)));
     } else if (type === 'p') {
-        const totalOther = currentC_cal + currentF_cal || 1;
-        const ratio = remainingKcal / totalOther;
         setProtein(newVal);
-        setCarbs(Math.round((currentC_cal * ratio) / 4));
-        setFat(Math.round((currentF_cal * ratio) / 9));
+        setFat(Math.max(0, Math.floor((kcal - (carbs * 4) - (newVal * 4)) / 9)));
     } else if (type === 'f') {
-        const totalOther = currentC_cal + currentP_cal || 1;
-        const ratio = remainingKcal / totalOther;
         setFat(newVal);
-        setCarbs(Math.round((currentC_cal * ratio) / 4));
-        setProtein(Math.round((currentP_cal * ratio) / 4));
+        setKcal((carbs * 4) + (protein * 4) + (newVal * 9));
     }
+    setTimeout(() => { isInternalUpdate.current = false; }, 50);
   };
 
-  const incrementMacro = (type: string, delta: number) => {
-    let currentVal = type === 'c' ? carbs : (type === 'p' ? protein : fat);
-    handleMacroChange(type, (currentVal + delta).toString());
-  }
-
-  // 3. SALVATAGGIO E REDIRECT (BLINDATA)
-  const handleGeneratePlan = async () => {
+  const handleSave = async () => {
     try {
       const settings = {
-        targetCalories: kcal,
-        protocol: selectedProtocol,
-        carbs,
-        protein,
-        fat,
-        lastUpdated: new Date().toISOString()
+        targetCalories: kcal, protocol: selectedProtocol,
+        carbs, protein, fat,
+        targetCarbs: carbs, targetProtein: protein, targetFat: fat,
+        updatedAt: new Date().toISOString()
       };
-
-      // Salviamo
       await AsyncStorage.setItem('@user_profile', JSON.stringify(settings));
-      
-      // VERIFICA: Leggiamo subito per forzare il sistema a confermare la scrittura
-      const verify = await AsyncStorage.getItem('@user_profile');
-      
-      if (verify) {
-        console.log("💾 Dati salvati correttamente sul disco.");
-        router.replace('/(tabs)/explore');
-      } else {
-        Alert.alert("Errore", "Il disco è pieno o protetto. Non riesco a salvare.");
-      }
-    } catch (e) {
-      console.log("Errore salvataggio profilo", e);
-      Alert.alert("Errore", "Impossibile salvare il profilo.");
-    }
+      await AsyncStorage.setItem('@show_tutorial', 'true');
+      router.replace('/(tabs)/explore');
+    } catch (e) { Alert.alert("Errore", "Impossibile salvare configurazione."); }
   };
 
-  // --- RENDER ---
+  if (isLoading) return <View style={styles.center}><ActivityIndicator size="large" color="#00cec9"/></View>;
 
-  // Se stiamo controllando, mostra spinner nero
-  if (isLoading) {
-    return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#00cec9" />
-      </View>
-    );
-  }
+  const carbsPct = Math.round(((carbs * 4) / Math.max(1, (carbs * 4) + (protein * 4) + (fat * 9))) * 100);
+  const proteinPct = Math.round(((protein * 4) / Math.max(1, (carbs * 4) + (protein * 4) + (fat * 9))) * 100);
+  const fatPct = Math.round(((fat * 9) / Math.max(1, (carbs * 4) + (protein * 4) + (fat * 9))) * 100);
 
-  // Se l'utente esiste già, REDIRECT immediato
-  if (hasProfile) {
-    return <Redirect href="/(tabs)/explore" />;
-  }
-
-  // Altrimenti, mostra la UI di Setup
-  const currentTotalKcal = (carbs * 4) + (protein * 4) + (fat * 9);
-  const safeTotal = currentTotalKcal > 0 ? currentTotalKcal : 1;
-  const carbsPct = Math.round(((carbs * 4) / safeTotal) * 100);
-  const proteinPct = Math.round(((protein * 4) / safeTotal) * 100);
-  const fatPct = Math.round(((fat * 9) / safeTotal) * 100);
-
-  const MacroControl = ({ label, val, type, color, max }: any) => (
+  const MacroRow = ({ label, val, type, color }: any) => (
     <View style={styles.macroRow}>
-      <View style={styles.macroHeader}>
-        <Text style={[styles.macroLabel, { color: color }]}>{label}</Text>
-        <View style={styles.inputWrapper}>
-            <TextInput
-                style={styles.numericInput}
-                keyboardType="numeric"
-                value={val.toString()}
-                onChangeText={(text) => handleMacroChange(type, text)}
-                maxLength={3}
-                selectTextOnFocus
-            />
-            <Text style={styles.unitText}>g</Text>
-            <Edit2 size={12} color="#636e72" style={{marginLeft: 6}} />
+        <View style={styles.macroInfo}>
+            <Text style={[styles.macroLabel, { color: color }]}>{label}</Text>
+            <View style={styles.inputContainer}>
+                <TextInput style={styles.inputSmall} value={val.toString()} onChangeText={(t) => handleMacroChange(type, t)} keyboardType="numeric" maxLength={3} />
+                <Text style={styles.unit}>g</Text>
+            </View>
         </View>
-      </View>
-      <View style={styles.sliderControls}>
-         <TouchableOpacity onPress={() => incrementMacro(type, -5)} style={styles.btnMini}><Text style={styles.btnText}>-</Text></TouchableOpacity>
-         <View style={styles.barTrack}>
-             <View style={[styles.barFill, { width: `${Math.min((val / max) * 100, 100)}%`, backgroundColor: color }]} />
-         </View>
-         <TouchableOpacity onPress={() => incrementMacro(type, 5)} style={styles.btnMini}><Text style={styles.btnText}>+</Text></TouchableOpacity>
-      </View>
+        <View style={styles.barContainer}>
+            <View style={[styles.barFill, { width: `${Math.min((val / 200) * 100, 100)}%`, backgroundColor: color }]} />
+        </View>
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={{ paddingBottom: 220 }} keyboardShouldPersistTaps="handled">
-        <View style={styles.header}>
-          <Text style={styles.superTitle}>BIO-HACKING SETUP</Text>
-          <Text style={styles.title}>Configura il Motore</Text>
-        </View>
+      <View style={styles.header}>
+        <Text style={styles.brand}>KetoLab by SINELICA DIGITAL</Text>
+        <Text style={styles.title}>CONFIGURAZIONE BIO</Text>
+      </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.protocolList}>
-          {PROTOCOLS.map((p) => {
-            const isActive = selectedProtocol === p.id;
-            return (
-              <TouchableOpacity 
-                key={p.id} 
-                style={[styles.chip, isActive && { backgroundColor: p.color, borderColor: p.color }]}
-                onPress={() => setSelectedProtocol(p.id)}
-              >
-                {React.cloneElement(p.icon as React.ReactElement, { size: 20, color: isActive ? '#000' : p.color })}
-                <Text style={[styles.chipText, isActive && { color: '#000' }]}>{p.name}</Text>
-              </TouchableOpacity>
-            );
-          })}
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <Text style={styles.sectionLabel}>SELEZIONA PROTOCOLLO</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.protocolContainer}>
+                {PROTOCOLS.map((p) => {
+                    const isActive = selectedProtocol === p.id;
+                    return (
+                        <TouchableOpacity key={p.id} style={[styles.protocolChip, isActive && { backgroundColor: p.color, borderColor: p.color }]} onPress={() => applyProtocolDefaults(p.id)}>
+                            {React.cloneElement(p.icon as React.ReactElement, { size: 16, color: isActive ? '#000' : p.color })}
+                            <Text style={[styles.protocolText, isActive && { color: '#000' }]}>{p.name}</Text>
+                        </TouchableOpacity>
+                    );
+                })}
+            </ScrollView>
+
+            <View style={styles.card}>
+                <View style={styles.cardHeader}><Text style={styles.cardTitle}>BUDGET CALORICO</Text><Edit2 size={14} color="#636e72" /></View>
+                <TextInput style={styles.kcalInput} value={kcal.toString()} onChangeText={handleKcalChange} keyboardType="numeric" maxLength={4} />
+                <Text style={styles.kcalUnit}>KCAL / GIORNO</Text>
+            </View>
+
+            <View style={styles.card}>
+                <Text style={styles.cardTitle}>RIPARTIZIONE MACROS</Text>
+                <View style={styles.chartContainer}>
+                    <View style={styles.chartItem}><Text style={[styles.chartVal, {color:'#fdcb6e'}]}>{carbsPct}%</Text><Text style={styles.chartLabel}>C</Text></View>
+                    <View style={styles.divider} />
+                    <View style={styles.chartItem}><Text style={[styles.chartVal, {color:'#74b9ff'}]}>{proteinPct}%</Text><Text style={styles.chartLabel}>P</Text></View>
+                    <View style={styles.divider} />
+                    <View style={styles.chartItem}><Text style={[styles.chartVal, {color:'#ff7675'}]}>{fatPct}%</Text><Text style={styles.chartLabel}>F</Text></View>
+                </View>
+                <View style={{marginTop: 15}}>
+                    <MacroRow label="CARBOIDRATI" val={carbs} type="c" color="#fdcb6e" />
+                    <MacroRow label="PROTEINE" val={protein} type="p" color="#74b9ff" />
+                    <MacroRow label="GRASSI" val={fat} type="f" color="#ff7675" />
+                </View>
+            </View>
         </ScrollView>
+      </KeyboardAvoidingView>
 
-        <View style={styles.divider} />
-
-        <View style={styles.section}>
-            <View style={styles.rowBetween}>
-                <View>
-                    <Text style={styles.sectionTitle}>BUDGET ENERGETICO</Text>
-                    <Text style={styles.subTitle}>I macro si adatteranno a questo tetto.</Text>
-                </View>
-                <View style={styles.kcalInputWrapper}>
-                    <TextInput
-                        style={styles.bigValue}
-                        keyboardType="numeric"
-                        value={kcal.toString()}
-                        onChangeText={handleKcalChange}
-                        maxLength={4}
-                        selectTextOnFocus
-                    />
-                    <Edit2 size={16} color="#00cec9" style={{marginLeft: 8}} />
-                </View>
-            </View>
-            <View style={styles.mainSliderControls}>
-                <TouchableOpacity onPress={() => setKcal(Math.max(100, kcal - 50))} style={styles.btnBig}><Text style={styles.btnText}>-</Text></TouchableOpacity>
-                <View style={styles.barTrackBig}>
-                    <View style={[styles.barFill, { width: `${Math.min((kcal / 4000) * 100, 100)}%`, backgroundColor: '#fff' }]} />
-                </View>
-                <TouchableOpacity onPress={() => setKcal(Math.min(5000, kcal + 50))} style={styles.btnBig}><Text style={styles.btnText}>+</Text></TouchableOpacity>
-            </View>
-        </View>
-
-        <View style={styles.macroCard}>
-            <Text style={styles.sectionTitle}>BILANCIAMENTO FINE</Text>
-            <Text style={styles.subTitleCard}>Modifica i grammi o usa i tasti +/-</Text>
-            
-            <View style={styles.chartRow}>
-                <View style={{alignItems:'center'}}>
-                    <Text style={[styles.pctText, {color:'#fdcb6e'}]}>{carbsPct}%</Text>
-                    <Text style={styles.pctLabel}>CARBS</Text>
-                </View>
-                <View style={{alignItems:'center'}}>
-                    <Text style={[styles.pctText, {color:'#74b9ff'}]}>{proteinPct}%</Text>
-                    <Text style={styles.pctLabel}>PRO</Text>
-                </View>
-                <View style={{alignItems:'center'}}>
-                    <Text style={[styles.pctText, {color:'#ff7675'}]}>{fatPct}%</Text>
-                    <Text style={styles.pctLabel}>FATS</Text>
-                </View>
-            </View>
-
-            <MacroControl label="CARBOIDRATI (4kcal/g)" val={carbs} type="c" color="#fdcb6e" max={200} />
-            <MacroControl label="PROTEINE (4kcal/g)" val={protein} type="p" color="#74b9ff" max={350} />
-            <MacroControl label="GRASSI (9kcal/g)" val={fat} type="f" color="#ff7675" max={250} />
-        </View>
-      </ScrollView>
-
-      {/* Tasto Flottante */}
-      <TouchableOpacity 
-          style={styles.mainButton}
-          onPress={handleGeneratePlan}
-      >
-          <View>
-              <Text style={styles.btnTitle}>GENERA PIANO</Text>
-              <Text style={styles.btnSubtitle}>{kcal} kcal • {fat}g Grassi</Text>
-          </View>
-          <ChevronRight size={28} color="#000" />
-      </TouchableOpacity>
+      {/* FOOTER FIXATO E ALZATO */}
+      <View style={[styles.footerContainer, { paddingBottom: insets.bottom + 30 }]}>
+        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+            <Text style={styles.saveBtnText}>SALVA & INIZIA</Text>
+            <ArrowRight size={20} color="#000" />
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  header: { padding: 25, paddingTop: 50 },
-  superTitle: { color: '#00cec9', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 5 },
-  title: { fontSize: 34, fontWeight: '900', color: '#fff' },
-  protocolList: { paddingHorizontal: 25, gap: 10, marginBottom: 20 },
-  chip: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 30, borderWidth: 1, borderColor: '#333', gap: 10, marginRight: 10 },
-  chipText: { color: '#fff', fontWeight: '900', fontSize: 14, letterSpacing: 0.5 },
-  divider: { height: 1, backgroundColor: '#222', marginVertical: 20 },
-  section: { paddingHorizontal: 25, marginBottom: 30 },
-  sectionTitle: { color: '#636e72', fontSize: 12, fontWeight: '700', letterSpacing: 1, marginBottom: 5 },
-  subTitle: { color: '#b2bec3', fontSize: 12, marginBottom: 10 },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  kcalInputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#222', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: '#333' },
-  bigValue: { color: '#fff', fontSize: 28, fontWeight: '900', textAlign: 'right', minWidth: 70 },
-  mainSliderControls: { flexDirection: 'row', alignItems: 'center', gap: 15 },
-  btnBig: { width: 50, height: 50, borderRadius: 16, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-  btnText: { color: '#fff', fontSize: 22, lineHeight: 24 },
-  barTrackBig: { flex: 1, height: 12, backgroundColor: '#222', borderRadius: 6, overflow: 'hidden' },
-  macroCard: { marginHorizontal: 20, backgroundColor: '#111', borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#333' },
-  subTitleCard: { color: '#636e72', fontSize: 12, marginBottom: 20, fontStyle:'italic' },
-  chartRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 30, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#222' },
-  pctText: { fontSize: 24, fontWeight: '900' },
-  pctLabel: { color: '#636e72', fontSize: 10, fontWeight: '700', marginTop: 5 },
-  macroRow: { marginBottom: 20 },
-  macroHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  macroLabel: { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
-  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#222', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#333', minWidth: 80, justifyContent:'flex-end' },
-  numericInput: { color: '#fff', fontSize: 18, fontWeight: '700', padding: 0, textAlign: 'right' },
-  unitText: { color: '#636e72', fontSize: 12, marginLeft: 2, fontWeight:'600' },
-  sliderControls: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  btnMini: { width: 35, height: 35, borderRadius: 10, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center' },
-  barTrack: { flex: 1, height: 6, backgroundColor: '#222', borderRadius: 3, overflow: 'hidden' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' },
+  header: { paddingHorizontal: 25, paddingTop: 20, paddingBottom: 20 },
+  brand: { color: '#00cec9', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 8, textTransform: 'uppercase' },
+  title: { color: '#fff', fontSize: 28, fontWeight: '900', letterSpacing: -0.5 },
+  
+  // Aumentato padding bottom per lo scroll
+  scrollContent: { paddingBottom: 180 }, 
+  
+  sectionLabel: { color: '#636e72', fontSize: 10, fontWeight: '800', marginLeft: 25, marginBottom: 10, letterSpacing: 1 },
+  protocolContainer: { paddingHorizontal: 25, gap: 10, marginBottom: 30 },
+  protocolChip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, backgroundColor: '#111', borderWidth: 1, borderColor: '#333' },
+  protocolText: { color: '#bdc3c7', fontSize: 12, fontWeight: '800' },
+  card: { marginHorizontal: 25, backgroundColor: '#0a0a0a', borderRadius: 20, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#1a1a1a' },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  cardTitle: { color: '#636e72', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  kcalInput: { color: '#fff', fontSize: 42, fontWeight: '900', textAlign: 'center', paddingVertical: 10 },
+  kcalUnit: { color: '#636e72', fontSize: 10, fontWeight: '700', textAlign: 'center', letterSpacing: 2 },
+  chartContainer: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginVertical: 15, backgroundColor: '#000', borderRadius: 12, padding: 10 },
+  chartItem: { alignItems: 'center', width: 60 },
+  chartVal: { fontSize: 18, fontWeight: '900' },
+  chartLabel: { color: '#444', fontSize: 10, fontWeight: '900', marginTop: 2 },
+  divider: { width: 1, height: 20, backgroundColor: '#222' },
+  macroRow: { marginBottom: 15 },
+  macroInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  macroLabel: { fontSize: 11, fontWeight: '800' },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  inputSmall: { color: '#fff', fontSize: 16, fontWeight: '700', textAlign: 'right', minWidth: 40, padding: 0 },
+  unit: { color: '#444', fontSize: 10, fontWeight: '600' },
+  barContainer: { height: 6, backgroundColor: '#1a1a1a', borderRadius: 3, overflow: 'hidden' },
   barFill: { height: '100%', borderRadius: 3 },
-  mainButton: { 
+
+  footerContainer: { 
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 40 : 20, 
-    left: 20, 
-    right: 20,
-    backgroundColor: '#00cec9', 
-    height: 75, 
-    borderRadius: 25, 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
+    bottom: 0,
+    left: 0,
+    right: 0,
     paddingHorizontal: 25, 
-    elevation: 10,
-    shadowColor: '#00cec9',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    zIndex: 9999,
+    paddingTop: 15,
+    backgroundColor: 'rgba(0,0,0,0.95)', // Leggera trasparenza per l'effetto glass
+    borderTopWidth: 1,
+    borderTopColor: '#111',
+    zIndex: 100
   },
-  btnTitle: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
-  btnSubtitle: { color: '#2d3436', fontSize: 12, fontWeight: '600' },
+  saveBtn: { 
+    backgroundColor: '#00cec9', 
+    height: 55, 
+    borderRadius: 16, 
+    flexDirection: 'row', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    gap: 10, 
+    shadowColor: '#00cec9', 
+    shadowOpacity: 0.3, 
+    shadowRadius: 10 
+  },
+  saveBtnText: { color: '#000', fontSize: 14, fontWeight: '900', letterSpacing: 1 },
 });

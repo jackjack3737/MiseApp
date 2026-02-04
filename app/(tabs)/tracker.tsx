@@ -3,10 +3,20 @@ import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Status
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase'; 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from 'expo-router';
-import { Plus, Trash2, Flame, Utensils, ShieldCheck, BrainCircuit, X, Minus, Search } from 'lucide-react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { Plus, Trash2, Flame, Utensils, ShieldCheck, BrainCircuit, X, Minus, Search, Beef, Fish, CookingPot, Leaf, Zap, Cookie, ArrowRight, ExternalLink, BookOpen, Activity, AlertCircle } from 'lucide-react-native';
 
 const MEALS = ['Colazione', 'Pranzo', 'Cena', 'Snack'];
+
+const IconMap: any = {
+  meat: <Beef size={18} color="#ff7675" />,
+  fish: <Fish size={18} color="#74b9ff" />,
+  eggs: <CookingPot size={18} color="#fdcb6e" />,
+  veggies: <Leaf size={18} color="#55efc4" />,
+  shake: <Zap size={18} color="#a29bfe" />,
+  snack: <Cookie size={18} color="#fab1a0" />,
+  default: <Utensils size={18} color="#00cec9" />
+};
 
 const getMealByTime = () => {
     const hour = new Date().getHours();
@@ -17,6 +27,7 @@ const getMealByTime = () => {
 };
 
 export default function TrackerScreen() {
+  const router = useRouter();
   const [inputText, setInputText] = useState('');
   const [selectedMeal, setSelectedMeal] = useState(getMealByTime());
   const [loading, setLoading] = useState(false);
@@ -25,49 +36,42 @@ export default function TrackerScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [targets, setTargets] = useState({ kcal: 2000, c: 30, p: 160, f: 140 });
 
+  // Modal State
   const [modalVisible, setModalVisible] = useState(false);
   const [tempFood, setTempFood] = useState<any>(null);
   const [mode, setMode] = useState('GRAMS'); 
   const [currentWeight, setCurrentWeight] = useState(100); 
   const [currentMultiplier, setCurrentMultiplier] = useState(1); 
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [foundRecipeId, setFoundRecipeId] = useState<string | null>(null);
 
-  // --- CARICAMENTO DATI (VERSIONE SICURA - SENZA AUTO-CANCELLAZIONE) ---
   const loadData = async () => {
     try {
-        // 1. Carica Profilo (Target Macro)
         const savedProfile = await AsyncStorage.getItem('@user_profile');
         if (savedProfile) {
             const p = JSON.parse(savedProfile);
             setTargets({
                 kcal: parseInt(p.targetCalories) || 2000,
-                c: parseInt(p.targetCarbs) || 30,
-                p: parseInt(p.targetProteins) || 160,
-                f: parseInt(p.targetFats) || 140,
+                c: parseInt(p.carbs) || 30,
+                p: parseInt(p.protein) || 160,
+                f: parseInt(p.fat) || 140,
             });
         }
 
-        // 2. Carica Diario
         const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
         if (savedLogs) {
             let allLogs = JSON.parse(savedLogs);
             const today = new Date().toISOString().split('T')[0];
-
-            // 🛑 HO RIMOSSO IL BLOCCO "AUTO-CLEAN" CHE CANCELLAVA I DATI
-            // Ora il Tracker si limita a leggere tutto e filtrare solo visivamente quello di oggi.
-            
-            // Filtra solo quelli di oggi per visualizzarli
             const todayLogs = allLogs.filter((log: any) => log.date === today);
-            
-            // Ordina dal più recente (opzionale, ma utile)
-            todayLogs.sort((a: any, b: any) => parseInt(b.id) - parseInt(a.id));
-
+            // Ordina per ID (più recente in alto)
+            todayLogs.sort((a: any, b: any) => Number(b.id) - Number(a.id));
             setLogs(todayLogs);
             calculateTotals(todayLogs);
         } else {
             setLogs([]);
             setTodayTotals({ kcal: 0, c: 0, p: 0, f: 0 });
         }
-    } catch (e) { console.error("Errore loadData:", e); }
+    } catch (e) { console.error(e); }
   };
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
@@ -84,125 +88,145 @@ export default function TrackerScreen() {
     setTodayTotals(totals);
   };
 
-  // --- 🔥 FUNZIONE RICERCA (SOLO AI - BYPASS DATABASE) ---
+  // --- FILTRO LISTE ---
+  const symptomsList = logs.filter(l => l.meal_type === 'SINTOMO');
+  const mealsList = logs.filter(l => l.meal_type !== 'SINTOMO');
+
+  // --- FUNZIONI ---
+  const checkForRecipe = async (foodName: string) => {
+    setFoundRecipeId(null);
+    if (!foodName) return;
+    try {
+        const { data } = await supabase.from('recipes').select('id').ilike('title', foodName).maybeSingle(); 
+        if (data) setFoundRecipeId(data.id);
+    } catch (e) {}
+  };
+
+  const handleItemPress = (item: any) => {
+    if (item.meal_type === 'SINTOMO') return; // I sintomi non si editano (per ora), si cancellano solo
+
+    const safeLabel = item.label || '100g'; 
+    const isPortion = safeLabel.includes('x');
+
+    setEditingId(item.id);
+    setMode(isPortion ? 'PORTIONS' : 'GRAMS');
+    
+    if (item.recipe_id) setFoundRecipeId(item.recipe_id);
+    else checkForRecipe(item.food_name);
+    
+    const numericValue = parseInt(safeLabel) || 100;
+    if (isPortion) setCurrentMultiplier(numericValue);
+    else setCurrentWeight(numericValue);
+
+    const factor = isPortion ? numericValue : (numericValue / 100);
+    const safeFactor = factor === 0 ? 1 : factor;
+
+    setTempFood({
+        name: item.food_name || "Alimento",
+        kcal: (item.kcal || 0) / safeFactor,
+        c: (item.carbs || 0) / safeFactor,
+        p: (item.proteins || 0) / safeFactor,
+        f: (item.fats || 0) / safeFactor,
+        weight_g: 100, 
+        category_icon: item.icon_type || 'default',
+        recipe_id: item.recipe_id 
+    });
+    
+    setModalVisible(true);
+  };
+
+  const navigateToRecipe = () => {
+      if (foundRecipeId) {
+          setModalVisible(false);
+          router.push(`/recipe-detail?id=${foundRecipeId}`);
+      }
+  };
+
   async function searchFood() {
     if (!inputText.trim()) return;
     setLoading(true);
     Keyboard.dismiss();
-
     try {
-        console.log("🚀 Cerco direttamente con l'AI: ", inputText);
-        let foodData = null;
-
-        // NOTA: Ho commentato la ricerca nel DB locale per forzare Gemini
-        /*
-        const { data: dbRecipe } = await supabase.from('recipes').select('*').ilike('title', `%${inputText}%`).maybeSingle();
-        if (dbRecipe) { ... }
-        */
-
-        // CHIAMATA EDGE FUNCTION
-        const { data, error } = await supabase.functions.invoke('analyze-meal', {
-            body: { query: inputText }
-        });
-
-        if (error) {
-            console.error("❌ Errore Edge Function:", error);
-            throw new Error(error.message || "Errore Server");
-        }
-
-        console.log("🤖 Risposta AI:", data);
+        const { data, error } = await supabase.functions.invoke('analyze-meal', { body: { query: inputText } });
+        if (error) throw error;
         
-        // Assegno i dati
-        foodData = data;
+        setEditingId(null);
         setMode('GRAMS');
         setCurrentWeight(data.weight_g || 100);
-
-        if (foodData) {
-            setTempFood(foodData);
-            setModalVisible(true);
-        }
-
-    } catch (error) {
-        console.log(error);
-        Alert.alert("Errore", "L'AI non risponde. Riprova.");
-    } finally { setLoading(false); }
+        setTempFood(data);
+        setFoundRecipeId(null);
+        checkForRecipe(data.name);
+        setModalVisible(true);
+    } catch (error) { Alert.alert("Errore AI", "Impossibile analizzare il pasto."); } 
+    finally { setLoading(false); }
   }
 
-  // --- RESTO IDENTICO ---
   const getFinalValues = () => {
       if (!tempFood) return { k: 0, c: 0, p: 0, f: 0, label: "" };
-      if (mode === 'PORTIONS') {
-          return {
-              k: Math.round(tempFood.kcal * currentMultiplier),
-              c: Math.round(tempFood.c * currentMultiplier),
-              p: Math.round(tempFood.p * currentMultiplier),
-              f: Math.round(tempFood.f * currentMultiplier),
-              label: `${currentMultiplier}x`
-          };
-      } else {
-          const ratio = currentWeight / (tempFood.weight_g || 100);
-          return {
-              k: Math.round(tempFood.kcal * ratio),
-              c: Math.round(tempFood.c * ratio),
-              p: Math.round(tempFood.p * ratio),
-              f: Math.round(tempFood.f * ratio),
-              label: `${currentWeight}g`
-          };
-      }
+      const ratio = mode === 'PORTIONS' ? currentMultiplier : currentWeight / (tempFood.weight_g || 100);
+      return {
+          k: Math.round(tempFood.kcal * ratio),
+          c: Math.round(tempFood.c * ratio),
+          p: Math.round(tempFood.p * ratio),
+          f: Math.round(tempFood.f * ratio),
+          label: mode === 'PORTIONS' ? `${currentMultiplier}x` : `${currentWeight}g`
+      };
   };
 
   const adjustAmount = (delta: number) => {
-      if (mode === 'PORTIONS') {
-          setCurrentMultiplier(prev => Math.max(0.25, prev + delta));
-      } else {
-          setCurrentWeight(prev => Math.max(10, prev + (delta * 10))); 
-      }
+      if (mode === 'PORTIONS') setCurrentMultiplier(prev => Math.max(0.25, prev + delta));
+      else setCurrentWeight(prev => Math.max(10, prev + (delta * 10))); 
   };
 
   async function confirmAndSave() {
-  if (!tempFood) return;
-  const final = getFinalValues();
-  const today = new Date().toISOString().split('T')[0];
+    if (!tempFood) return;
+    const final = getFinalValues();
+    const today = new Date().toISOString().split('T')[0];
+    try {
+        const savedLogsJson = await AsyncStorage.getItem('@user_daily_logs');
+        let currentLogs = savedLogsJson ? JSON.parse(savedLogsJson) : [];
+        const finalRecipeId = tempFood.recipe_id || foundRecipeId || null;
 
-  try {
-      // 🚨 LEGGI SEMPRE PRIMA DI SCRIVERE
-      const savedLogsJson = await AsyncStorage.getItem('@user_daily_logs');
-      let currentLogs = savedLogsJson ? JSON.parse(savedLogsJson) : [];
-      
-      const newEntry = {
-          id: Date.now().toString(),
-          meal_type: selectedMeal,
-          food_name: tempFood.name,
-          kcal: final.k,
-          carbs: final.c,
-          proteins: final.p,
-          fats: final.f,
-          date: today,
-          label: final.label
-      };
-
-      // Aggiungi il nuovo log a quelli che abbiamo appena letto
-      const updatedLogs = [newEntry, ...currentLogs];
-      
-      // Salva la lista completa
-      await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(updatedLogs));
-
-      setModalVisible(false);
-      setTempFood(null);
-      loadData(); // Ricarica la UI
-  } catch (e) { Alert.alert("Errore", "Salvataggio fallito."); }
-}
+        if (editingId) {
+            currentLogs = currentLogs.map((log: any) => {
+                if (log.id === editingId) {
+                    return {
+                        ...log,
+                        kcal: final.k, carbs: final.c, proteins: final.p, fats: final.f,
+                        label: final.label, recipe_id: finalRecipeId
+                    };
+                }
+                return log;
+            });
+        } else {
+            const newEntry = {
+                id: Date.now().toString(),
+                meal_type: selectedMeal,
+                food_name: tempFood.name,
+                kcal: final.k, carbs: final.c, proteins: final.p, fats: final.f,
+                date: today, label: final.label,
+                icon_type: tempFood.category_icon || 'default',
+                recipe_id: finalRecipeId
+            };
+            currentLogs = [newEntry, ...currentLogs];
+        }
+        await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(currentLogs));
+        setModalVisible(false);
+        setTempFood(null);
+        setEditingId(null);
+        setFoundRecipeId(null);
+        setInputText('');
+        loadData();
+    } catch (e) { Alert.alert("Errore", "Salvataggio fallito."); }
+  }
 
   async function deleteLog(id: string) {
-    try {
-        const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
-        if (savedLogs) {
-            const allLogs = JSON.parse(savedLogs);
-            const filtered = allLogs.filter((log: any) => log.id !== id);
-            await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(filtered));
-            loadData();
-        }
-    } catch (e) { Alert.alert("Errore", "Impossibile eliminare."); }
+    const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
+    if (savedLogs) {
+        const filtered = JSON.parse(savedLogs).filter((log: any) => log.id !== id);
+        await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(filtered));
+        loadData();
+    }
   }
 
   const ProgressBar = ({ label, current, max, color }: any) => {
@@ -211,7 +235,7 @@ export default function TrackerScreen() {
         <View style={styles.progressRow}>
             <View style={{flexDirection:'row', justifyContent:'space-between', marginBottom: 4}}>
                 <Text style={[styles.progressLabel, {color: color}]}>{label}</Text>
-                <Text style={styles.progressValue}>{Math.round(current)} / {max}g</Text>
+                <Text style={styles.progressValue}>{Math.round(current)}/{max}g</Text>
             </View>
             <View style={styles.track}><View style={[styles.fill, { width: `${progress}%`, backgroundColor: color }]} /></View>
         </View>
@@ -225,24 +249,23 @@ export default function TrackerScreen() {
       <StatusBar barStyle="light-content" />
       <View style={styles.header}>
         <View>
-            <Text style={styles.subtitle}>OGGI</Text>
-            <Text style={styles.title}>DIARIO LOCALE</Text>
+            <Text style={styles.subtitle}>{new Date().toLocaleDateString('it-IT', { weekday: 'long' }).toUpperCase()}</Text>
+            <Text style={styles.title}>BIO-LOG</Text>
         </View>
         <View style={styles.kcalCircle}>
              <Text style={styles.kcalNumber}>{Math.round(todayTotals.kcal)}</Text>
-             <Text style={styles.kcalLabel}>/ {targets.kcal} KCAL</Text>
+             <Text style={styles.kcalLabel}>KCAL TOTALI</Text>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 100 }} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#00cec9" />}>
         <View style={styles.dashboard}>
-            <ProgressBar label="CARBOIDRATI" current={todayTotals.c} max={targets.c} color="#fdcb6e" />
-            <ProgressBar label="PROTEINE" current={todayTotals.p} max={targets.p} color="#74b9ff" />
-            <ProgressBar label="GRASSI" current={todayTotals.f} max={targets.f} color="#ff7675" />
+            <ProgressBar label="CARBS" current={todayTotals.c} max={targets.c} color="#fdcb6e" />
+            <ProgressBar label="PROTEIN" current={todayTotals.p} max={targets.p} color="#74b9ff" />
+            <ProgressBar label="FATS" current={todayTotals.f} max={targets.f} color="#ff7675" />
         </View>
 
         <View style={styles.inputSection}>
-            <Text style={styles.sectionTitle}>AGGIUNGI CIBO</Text>
             <View style={styles.mealTabs}>
                 {MEALS.map(meal => (
                     <TouchableOpacity key={meal} onPress={() => setSelectedMeal(meal)} style={[styles.mealTab, selectedMeal === meal && styles.mealTabActive]}>
@@ -253,41 +276,68 @@ export default function TrackerScreen() {
             <View style={styles.inputWrapper}>
                 <TextInput 
                     style={styles.textInput}
-                    placeholder="Es. 'Big Mac', 'Pizza', 'Sgarro'..."
-                    placeholderTextColor="#636e72"
+                    placeholder="Cosa hai mangiato?"
+                    placeholderTextColor="#444"
                     value={inputText}
                     onChangeText={setInputText}
                 />
                 <TouchableOpacity style={[styles.sendBtn, loading && {opacity: 0.5}]} onPress={searchFood} disabled={loading}>
-                    {loading ? <ActivityIndicator color="#000" /> : <Search size={28} color="#000" />}
+                    {loading ? <ActivityIndicator color="#000" size="small" /> : <Plus size={24} color="#000" />}
                 </TouchableOpacity>
-            </View>
-            <View style={styles.securityBadge}>
-                <ShieldCheck size={12} color="#00cec9" />
-                <Text style={styles.hint}>AI-Only Mode (DB Bypassed)</Text>
             </View>
         </View>
 
         <View style={styles.logSection}>
-            <Text style={styles.sectionTitle}>STORICO DI OGGI ({logs.length})</Text>
-            {logs.length === 0 ? (
-                <View style={styles.emptyContainer}><BrainCircuit size={40} color="#333" /><Text style={styles.emptyText}>Nessun pasto loggato oggi.</Text></View>
-            ) : (
-                logs.map((item: any) => (
-                    <View key={item.id} style={styles.logItem}>
-                        <View style={styles.logIcon}><Utensils size={16} color="#00cec9" /></View>
-                        <View style={{flex: 1}}>
-                            <Text style={styles.logMealType}>{item.meal_type} • {item.label}</Text>
-                            <Text style={styles.logFoodName}>{item.food_name}</Text>
-                            <View style={styles.logMacros}>
-                                <Text style={styles.logMacroText}><Flame size={10} color="#e17055"/> {item.kcal} kcal</Text>
-                                <Text style={styles.logMacroText}>C: {Math.round(item.carbs)}g</Text>
-                                <Text style={styles.logMacroText}>P: {Math.round(item.proteins)}g</Text>
-                                <Text style={styles.logMacroText}>F: {Math.round(item.fats)}g</Text>
+            
+            {/* --- SEZIONE SINTOMI (SE PRESENTI) --- */}
+            {symptomsList.length > 0 && (
+                <View style={styles.symptomsContainer}>
+                    <Text style={[styles.sectionTitle, {color: '#ff7675'}]}>STATO BIO-FISICO ATTUALE</Text>
+                    {symptomsList.map((item) => (
+                        <View key={item.id} style={styles.symptomItem}>
+                            <View style={styles.symptomIcon}>
+                                <Activity size={18} color="#ff7675" />
                             </View>
+                            <View style={{flex: 1}}>
+                                <Text style={styles.symptomName}>{item.food_name}</Text>
+                                <Text style={styles.symptomLabel}>{item.label}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => deleteLog(item.id)} style={styles.deleteBtn}>
+                                <X size={16} color="#636e72" />
+                            </TouchableOpacity>
                         </View>
+                    ))}
+                </View>
+            )}
+
+            {/* --- SEZIONE PASTI --- */}
+            <Text style={styles.sectionTitle}>PASTI REGISTRATI</Text>
+            {mealsList.length === 0 ? (
+                <View style={styles.emptyContainer}><BrainCircuit size={30} color="#111" /><Text style={styles.emptyText}>Nessun pasto registrato oggi.</Text></View>
+            ) : (
+                mealsList.map((item: any) => (
+                    <View key={item.id} style={styles.logItem}>
+                        <View style={styles.logIcon}>
+                          {IconMap[item.icon_type] || IconMap.default}
+                        </View>
+                        
+                        <TouchableOpacity 
+                            style={{flex: 1, marginRight: 10}} 
+                            onPress={() => handleItemPress(item)}
+                            activeOpacity={0.6}
+                        >
+                            <View style={styles.logHeaderRow}>
+                              <Text style={styles.logFoodName}>{item.food_name}</Text>
+                              <View style={{flexDirection:'row', alignItems:'center'}}>
+                                <Text style={styles.logKcalText}>{item.kcal} kcal</Text>
+                                {item.recipe_id && <BookOpen size={12} color="#00cec9" style={{marginLeft: 6}}/>}
+                              </View>
+                            </View>
+                            <Text style={styles.logMeta}>{item.meal_type} • {item.label || '100g'} • P: {item.proteins}g</Text>
+                        </TouchableOpacity>
+
                         <TouchableOpacity onPress={() => deleteLog(item.id)} style={styles.deleteBtn}>
-                            <Trash2 size={18} color="#636e72" />
+                            <Trash2 size={18} color="#333" />
                         </TouchableOpacity>
                     </View>
                 ))
@@ -295,17 +345,24 @@ export default function TrackerScreen() {
         </View>
       </ScrollView>
 
-      <Modal animationType="slide" transparent={true} visible={modalVisible}>
+      {/* MODAL */}
+      <Modal animationType="fade" transparent={true} visible={modalVisible}>
         <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
                 <View style={styles.modalHeader}>
-                    <Text style={styles.modalTitle}>CONFERMA</Text>
+                    <Text style={styles.modalTitle}>{editingId ? 'MODIFICA PASTO' : 'BIO-ANALISI'}</Text>
                     <TouchableOpacity onPress={() => setModalVisible(false)}><X size={24} color="#636e72" /></TouchableOpacity>
                 </View>
-
                 {tempFood && (
                     <>
-                        <Text style={styles.foodName}>{tempFood.name}</Text>
+                        <Text style={styles.foodName}>{tempFood.name.toUpperCase()}</Text>
+                        {foundRecipeId && (
+                            <TouchableOpacity style={styles.modalRecipeLink} onPress={navigateToRecipe}>
+                                <BookOpen size={16} color="#000" />
+                                <Text style={styles.modalRecipeText}>LEGGI LA RICETTA</Text>
+                                <ExternalLink size={12} color="#000" />
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.portionControl}>
                             <TouchableOpacity onPress={() => adjustAmount(-1)} style={styles.portionBtn}><Minus size={24} color="#fff" /></TouchableOpacity>
                             <View style={{alignItems:'center'}}>
@@ -313,20 +370,16 @@ export default function TrackerScreen() {
                                     {mode === 'GRAMS' ? currentWeight : currentMultiplier}
                                     <Text style={{fontSize: 16, color:'#636e72'}}>{mode === 'GRAMS' ? 'g' : 'x'}</Text>
                                 </Text>
-                                <Text style={styles.portionLabel}>{mode === 'GRAMS' ? 'PESO' : 'PORZIONE'}</Text>
                             </View>
                             <TouchableOpacity onPress={() => adjustAmount(1)} style={styles.portionBtn}><Plus size={24} color="#fff" /></TouchableOpacity>
                         </View>
-
                         <View style={styles.previewBox}>
-                            <View style={styles.previewItem}><Text style={styles.previewVal}>{finalVals.k}</Text><Text style={styles.previewLabel}>KCAL</Text></View>
-                            <View style={styles.previewItem}><Text style={styles.previewVal}>{finalVals.c}g</Text><Text style={styles.previewLabel}>CARB</Text></View>
-                            <View style={styles.previewItem}><Text style={styles.previewVal}>{finalVals.p}g</Text><Text style={styles.previewLabel}>PRO</Text></View>
-                            <View style={styles.previewItem}><Text style={styles.previewVal}>{finalVals.f}g</Text><Text style={styles.previewLabel}>FAT</Text></View>
+                            <View style={styles.previewItem}><Text style={[styles.previewVal, {color:'#74b9ff'}]}>{finalVals.p}g</Text><Text style={styles.previewLabel}>PRO</Text></View>
+                            <View style={styles.previewItem}><Text style={[styles.previewVal, {color:'#fdcb6e'}]}>{finalVals.c}g</Text><Text style={styles.previewLabel}>CARB</Text></View>
+                            <View style={styles.previewItem}><Text style={[styles.previewVal, {color:'#ff7675'}]}>{finalVals.f}g</Text><Text style={styles.previewLabel}>FAT</Text></View>
                         </View>
-
                         <TouchableOpacity style={styles.confirmBtn} onPress={confirmAndSave}>
-                            <Text style={styles.confirmBtnText}>SALVA DIARIO</Text>
+                            <Text style={styles.confirmBtnText}>{editingId ? 'SALVA MODIFICHE' : 'REGISTRA PASTO'}</Text>
                         </TouchableOpacity>
                     </>
                 )}
@@ -339,52 +392,63 @@ export default function TrackerScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 25, paddingTop: 50 },
-  subtitle: { color: '#00cec9', fontSize: 12, fontWeight: '900', letterSpacing: 1, marginBottom: 5 },
-  title: { color: '#fff', fontSize: 32, fontWeight: '900' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 25, paddingTop: 20 },
+  subtitle: { color: '#636e72', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 4 },
+  title: { color: '#fff', fontSize: 28, fontWeight: '900' },
   kcalCircle: { alignItems: 'flex-end' },
-  kcalNumber: { color: '#00cec9', fontSize: 28, fontWeight: '900' },
-  kcalLabel: { color: '#636e72', fontSize: 10, fontWeight: '700' },
-  dashboard: { backgroundColor: '#111', marginHorizontal: 20, padding: 20, borderRadius: 25, marginBottom: 30, borderWidth: 1, borderColor: '#222' },
+  kcalNumber: { color: '#00cec9', fontSize: 24, fontWeight: '900' },
+  kcalLabel: { color: '#333', fontSize: 8, fontWeight: '900' },
+  dashboard: { backgroundColor: '#0a0a0a', marginHorizontal: 20, padding: 20, borderRadius: 25, marginBottom: 25, borderWidth: 1, borderColor: '#111' },
   progressRow: { marginBottom: 15 },
-  progressLabel: { fontSize: 10, fontWeight: '900' },
-  progressValue: { color: '#fff', fontSize: 10, fontWeight: '700' },
-  track: { height: 6, backgroundColor: '#222', borderRadius: 3, marginTop: 5 },
-  fill: { height: '100%', borderRadius: 3 },
-  inputSection: { paddingHorizontal: 20, marginBottom: 30 },
-  sectionTitle: { color: '#636e72', fontSize: 12, fontWeight: '900', marginBottom: 15 },
-  mealTabs: { flexDirection: 'row', gap: 10, marginBottom: 15 },
-  mealTab: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 15, backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
+  progressLabel: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  progressValue: { color: '#fff', fontSize: 9, fontWeight: '700' },
+  track: { height: 4, backgroundColor: '#1a1a1a', borderRadius: 2, marginTop: 6 },
+  fill: { height: '100%', borderRadius: 2 },
+  inputSection: { paddingHorizontal: 20, marginBottom: 25 },
+  mealTabs: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  mealTab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#1a1a1a' },
   mealTabActive: { backgroundColor: '#00cec9', borderColor: '#00cec9' },
-  mealTabText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  inputWrapper: { flexDirection: 'row', backgroundColor: '#111', borderRadius: 20, overflow: 'hidden', borderWidth: 1, borderColor: '#222' },
-  textInput: { flex: 1, color: '#fff', padding: 15, fontSize: 16 },
-  sendBtn: { width: 60, backgroundColor: '#00cec9', justifyContent: 'center', alignItems: 'center' },
-  securityBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
-  hint: { color: '#636e72', fontSize: 10, fontWeight: '600' },
+  mealTabText: { color: '#636e72', fontSize: 10, fontWeight: '800' },
+  inputWrapper: { flexDirection: 'row', backgroundColor: '#0a0a0a', borderRadius: 15, overflow: 'hidden', borderWidth: 1, borderColor: '#1a1a1a' },
+  textInput: { flex: 1, color: '#fff', padding: 12, fontSize: 14 },
+  sendBtn: { width: 50, backgroundColor: '#00cec9', justifyContent: 'center', alignItems: 'center' },
+  
   logSection: { paddingHorizontal: 20 },
+  sectionTitle: { color: '#333', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 15 },
   emptyContainer: { alignItems: 'center', padding: 40, gap: 10 },
-  emptyText: { color: '#636e72', fontSize: 14 },
-  logItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', padding: 15, borderRadius: 20, marginBottom: 10, borderWidth: 1, borderColor: '#222' },
-  logIcon: { width: 35, height: 35, borderRadius: 17.5, backgroundColor: 'rgba(0, 206, 201, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
-  logMealType: { color: '#00cec9', fontSize: 10, fontWeight: '900', marginBottom: 2 },
-  logFoodName: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  logMacros: { flexDirection: 'row', gap: 10, marginTop: 5 },
-  logMacroText: { color: '#636e72', fontSize: 11 },
-  deleteBtn: { padding: 10 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#111', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, minHeight: 500 },
+  emptyText: { color: '#1a1a1a', fontSize: 12, fontWeight: '700' },
+  
+  // SINTOMI STYLES
+  symptomsContainer: { marginBottom: 25 },
+  symptomItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ff767510', padding: 12, borderRadius: 18, marginBottom: 8, borderWidth: 1, borderColor: '#ff767530' },
+  symptomIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#ff767520', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  symptomName: { color: '#ff7675', fontSize: 13, fontWeight: '800' },
+  symptomLabel: { color: '#636e72', fontSize: 10, fontWeight: '600' },
+
+  logItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#080808', padding: 12, borderRadius: 18, marginBottom: 8, borderWidth: 1, borderColor: '#111' },
+  logIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', marginRight: 12, borderWidth: 1, borderColor: '#1a1a1a' },
+  logHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  logFoodName: { color: '#fff', fontSize: 14, fontWeight: '800', flex: 1 },
+  logKcalText: { color: '#00cec9', fontSize: 12, fontWeight: '900' },
+  logMeta: { color: '#444', fontSize: 10, fontWeight: '600', marginTop: 2 },
+  deleteBtn: { padding: 8, marginLeft: 5 },
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', padding: 20 },
+  modalContent: { backgroundColor: '#0a0a0a', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: '#1a1a1a' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  foodName: { color: '#00cec9', fontSize: 24, fontWeight: '900', marginBottom: 20, textAlign:'center' },
-  portionControl: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#000', borderRadius: 20, padding: 15, marginBottom: 30 },
-  portionBtn: { width: 50, height: 50, borderRadius: 15, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' },
-  portionValue: { color: '#fff', fontSize: 32, fontWeight: '900' },
-  portionLabel: { color: '#636e72', fontSize: 10, fontWeight: '700' },
-  previewBox: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 30, backgroundColor: 'rgba(255,255,255,0.05)', padding: 15, borderRadius: 15 },
+  modalTitle: { color: '#636e72', fontSize: 10, fontWeight: '900', letterSpacing: 2 },
+  foodName: { color: '#fff', fontSize: 20, fontWeight: '900', marginBottom: 15, textAlign:'center' },
+  
+  modalRecipeLink: { backgroundColor: '#00cec9', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 14, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'center', marginBottom: 25, width: '100%', justifyContent: 'center' },
+  modalRecipeText: { color: '#000', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+
+  portionControl: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#000', borderRadius: 20, padding: 15, marginBottom: 25 },
+  portionBtn: { width: 45, height: 45, borderRadius: 12, backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },
+  portionValue: { color: '#fff', fontSize: 28, fontWeight: '900' },
+  previewBox: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 25, backgroundColor: '#000', padding: 15, borderRadius: 15 },
   previewItem: { alignItems: 'center' },
-  previewVal: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  previewLabel: { color: '#636e72', fontSize: 10, fontWeight: '700' },
-  confirmBtn: { backgroundColor: '#00cec9', height: 60, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-  confirmBtnText: { color: '#000', fontSize: 16, fontWeight: '900' },
+  previewVal: { fontSize: 16, fontWeight: '900' },
+  previewLabel: { color: '#333', fontSize: 8, fontWeight: '900', marginTop: 4 },
+  confirmBtn: { backgroundColor: '#00cec9', height: 60, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  confirmBtnText: { color: '#000', fontSize: 15, fontWeight: '900' },
 });
