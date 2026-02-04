@@ -1,53 +1,48 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 export default function RootLayout() {
   return (
-    <>
-      {/* Forza la barra di stato (batteria, orario) bianca su sfondo nero */}
+    <SafeAreaProvider>
       <StatusBar style="light" />
       
       <Stack 
         screenOptions={{ 
           headerShown: false,
-          // Imposta sfondo nero di default per evitare flash bianchi durante le transizioni
           contentStyle: { backgroundColor: '#000' } 
         }}
       >
-        {/* 1. SETUP / ONBOARDING (La prima schermata che vedi) */}
-        <Stack.Screen 
-          name="index" 
-          options={{ headerShown: false }} 
-        />
-
-        {/* 2. MENU PRINCIPALE (Le 4 Tab in basso) */}
+        {/* 1. NAVIGAZIONE PRINCIPALE (Contiene Explore, Advisor, Tracker, Spesa) */}
         <Stack.Screen 
           name="(tabs)" 
           options={{ headerShown: false }} 
         />
         
-        {/* 3. IMPOSTAZIONI PROFILO (Si apre come una finestra sopra le tab) */}
+        {/* 2. PROFILO (Metabolic Mixer) - Apre un Modal sopra le Tabs */}
         <Stack.Screen 
           name="profile" 
           options={{ 
-            presentation: 'modal', // Effetto "foglio che sale dal basso"
-            headerShown: true,     // Mostriamo l'header per avere il tasto "Chiudi" nativo
-            headerTitle: 'SETTINGS', // Titolo in alto
-            headerStyle: { backgroundColor: '#000' }, // Header nero
-            headerTintColor: '#fff', // Testo e freccia bianchi
-            headerShadowVisible: false, // Toglie la riga grigia brutta sotto l'header
+            presentation: 'modal', 
+            headerShown: true, 
+            headerTitle: 'IMPOSTAZIONI BIO',
+            headerStyle: { backgroundColor: '#111' }, 
+            headerTintColor: '#00cec9', 
+            headerShadowVisible: false,
           }} 
         />
 
-        {/* 4. DETTAGLIO RICETTA (Si apre come una scheda classica) */}
+        {/* 3. DETTAGLIO RICETTA - Transizione a scheda (Card) */}
         <Stack.Screen 
           name="recipe-detail" 
           options={{ 
-            presentation: 'card', 
+            presentation: 'card',
             headerShown: false 
           }} 
         />
+
+        {/* NOTA: Il file 'medical' è gestito ora da (tabs)/_layout.tsx */}
       </Stack>
-    </>
+    </SafeAreaProvider>
   );
 }

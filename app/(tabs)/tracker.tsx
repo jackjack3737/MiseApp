@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, SafeAreaView, StatusBar, ActivityIndicator, Keyboard, Alert, RefreshControl, Modal } from 'react-native';
+import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, StatusBar, ActivityIndicator, Keyboard, Alert, RefreshControl, Modal } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase'; 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
@@ -30,9 +31,10 @@ export default function TrackerScreen() {
   const [currentWeight, setCurrentWeight] = useState(100); 
   const [currentMultiplier, setCurrentMultiplier] = useState(1); 
 
-  // --- CARICAMENTO DATI ---
+  // --- CARICAMENTO DATI (VERSIONE SICURA - SENZA AUTO-CANCELLAZIONE) ---
   const loadData = async () => {
     try {
+        // 1. Carica Profilo (Target Macro)
         const savedProfile = await AsyncStorage.getItem('@user_profile');
         if (savedProfile) {
             const p = JSON.parse(savedProfile);
@@ -44,27 +46,28 @@ export default function TrackerScreen() {
             });
         }
 
+        // 2. Carica Diario
         const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
         if (savedLogs) {
             let allLogs = JSON.parse(savedLogs);
             const today = new Date().toISOString().split('T')[0];
-            const thirtyDaysAgo = new Date();
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            const limitDate = thirtyDaysAgo.toISOString().split('T')[0];
-            const cleanedLogs = allLogs.filter((log: any) => log.date >= limitDate);
-            
-            if (cleanedLogs.length !== allLogs.length) {
-                await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(cleanedLogs));
-            }
 
-            const todayLogs = cleanedLogs.filter((log: any) => log.date === today);
+            // 🛑 HO RIMOSSO IL BLOCCO "AUTO-CLEAN" CHE CANCELLAVA I DATI
+            // Ora il Tracker si limita a leggere tutto e filtrare solo visivamente quello di oggi.
+            
+            // Filtra solo quelli di oggi per visualizzarli
+            const todayLogs = allLogs.filter((log: any) => log.date === today);
+            
+            // Ordina dal più recente (opzionale, ma utile)
+            todayLogs.sort((a: any, b: any) => parseInt(b.id) - parseInt(a.id));
+
             setLogs(todayLogs);
             calculateTotals(todayLogs);
         } else {
             setLogs([]);
             setTodayTotals({ kcal: 0, c: 0, p: 0, f: 0 });
         }
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error("Errore loadData:", e); }
   };
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
@@ -157,32 +160,38 @@ export default function TrackerScreen() {
   };
 
   async function confirmAndSave() {
-    if (!tempFood) return;
-    const final = getFinalValues();
-    const today = new Date().toISOString().split('T')[0];
+  if (!tempFood) return;
+  const final = getFinalValues();
+  const today = new Date().toISOString().split('T')[0];
 
-    try {
-        const newEntry = {
-            id: Date.now().toString(),
-            meal_type: selectedMeal,
-            food_name: tempFood.name,
-            kcal: final.k,
-            carbs: final.c,
-            proteins: final.p,
-            fats: final.f,
-            date: today,
-            label: final.label
-        };
-        const existingLogsJson = await AsyncStorage.getItem('@user_daily_logs');
-        const existingLogs = existingLogsJson ? JSON.parse(existingLogsJson) : [];
-        const updatedLogs = [newEntry, ...existingLogs];
-        await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(updatedLogs));
-        setModalVisible(false);
-        setTempFood(null);
-        setInputText('');
-        loadData();
-    } catch (e) { Alert.alert("Errore", "Salvataggio fallito."); }
-  }
+  try {
+      // 🚨 LEGGI SEMPRE PRIMA DI SCRIVERE
+      const savedLogsJson = await AsyncStorage.getItem('@user_daily_logs');
+      let currentLogs = savedLogsJson ? JSON.parse(savedLogsJson) : [];
+      
+      const newEntry = {
+          id: Date.now().toString(),
+          meal_type: selectedMeal,
+          food_name: tempFood.name,
+          kcal: final.k,
+          carbs: final.c,
+          proteins: final.p,
+          fats: final.f,
+          date: today,
+          label: final.label
+      };
+
+      // Aggiungi il nuovo log a quelli che abbiamo appena letto
+      const updatedLogs = [newEntry, ...currentLogs];
+      
+      // Salva la lista completa
+      await AsyncStorage.setItem('@user_daily_logs', JSON.stringify(updatedLogs));
+
+      setModalVisible(false);
+      setTempFood(null);
+      loadData(); // Ricarica la UI
+  } catch (e) { Alert.alert("Errore", "Salvataggio fallito."); }
+}
 
   async function deleteLog(id: string) {
     try {

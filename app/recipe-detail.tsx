@@ -8,7 +8,7 @@ import { ArrowLeft, Clock, Flame, Play, Pause, RotateCcw, Activity, WheatOff, Mi
 const { width } = Dimensions.get('window');
 
 // --- HELPER PER RENDERING SICURO ---
-const safeRender = (data) => {
+const safeRender = (data: any) => {
     if (!data) return "";
     if (typeof data === 'string') return data;
     if (Array.isArray(data)) return data.join('\n• ');
@@ -19,7 +19,7 @@ const safeRender = (data) => {
 };
 
 // --- SMART SCALER FUNCTION ---
-const scaleIngredients = (text, multiplier) => {
+const scaleIngredients = (text: string, multiplier: number) => {
     if (!text) return "";
     if (multiplier === 1) return text;
     return text.replace(/(\d+(?:[.,]\d+)?)\s*(g|ml|kg|l|oz|lb|cucchiai|cucchiaini|cm|mm|misurini)/gi, (match, number, unit) => {
@@ -30,23 +30,23 @@ const scaleIngredients = (text, multiplier) => {
 };
 
 // --- COMPONENTE TIMER ---
-const StepTimer = ({ durationMinutes, label }) => {
+const StepTimer = ({ durationMinutes, label }: any) => {
   const totalSeconds = durationMinutes * 60;
   const [timeLeft, setTimeLeft] = useState(totalSeconds);
   const [isRunning, setIsRunning] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
 
   useEffect(() => {
-    let interval = null;
+    let interval: any = null;
     if (isRunning && timeLeft > 0) {
-      interval = setInterval(() => { setTimeLeft((prev) => prev - 1); }, 1000);
+      interval = setInterval(() => { setTimeLeft((prev: number) => prev - 1); }, 1000);
     } else if (timeLeft === 0 && isRunning) {
       setIsRunning(false); setIsFinished(true); Vibration.vibrate([0, 500, 200, 500]);
     }
     return () => clearInterval(interval);
   }, [isRunning, timeLeft]);
 
-  const formatTime = (s) => {
+  const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
     return `${m}:${sec < 10 ? '0' : ''}${sec}`;
@@ -87,8 +87,8 @@ export default function RecipeDetailScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   
-  const [recipe, setRecipe] = useState(null);
-  const [steps, setSteps] = useState([]);
+  const [recipe, setRecipe] = useState<any>(null);
+  const [steps, setSteps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [multiplier, setMultiplier] = useState(1);
@@ -116,7 +116,7 @@ export default function RecipeDetailScreen() {
     } catch (e) { console.error(e); } finally { setLoading(false); }
   }
 
-  // --- LOGICA TRACKER LOCALE (VENDIBILE) ---
+  // --- LOGICA TRACKER LOCALE ---
   async function handleTrackMeal() {
     setLogging(true);
     try {
@@ -127,7 +127,8 @@ export default function RecipeDetailScreen() {
             carbs: Math.round(recipe.carbs * multiplier),
             proteins: Math.round(recipe.proteins * multiplier),
             fats: Math.round(recipe.fats * multiplier),
-            date: new Date().toISOString().split('T')[0]
+            date: new Date().toISOString().split('T')[0],
+            meal_type: 'Pranzo' // Default, poi modificabile
         };
 
         const existingLogsJson = await AsyncStorage.getItem('@user_daily_logs');
@@ -144,46 +145,79 @@ export default function RecipeDetailScreen() {
     } finally { setLogging(false); }
   }
 
-  // --- LOGICA CARRELLO LOCALE CON MATCHING KEYWORDS ---
+  // --- LOGICA CARRELLO LOCALE (FIXATA) ---
   async function handleAddToShoppingList() {
     setAddingToCart(true);
     try {
-      const list = recipe.ingredients_list;
-      if (!list || list.length === 0) return;
+      // 1. NORMALIZZAZIONE INGREDIENTI
+      let list: any[] = [];
+      const rawData = recipe.ingredients_list;
 
+      if (Array.isArray(rawData)) {
+        list = rawData;
+      } else if (typeof rawData === 'string') {
+        try {
+          if (rawData.trim().startsWith('[')) {
+             list = JSON.parse(rawData);
+          } else {
+             list = rawData.split(/\n|,/).map(s => s.trim()).filter(s => s.length > 0);
+          }
+        } catch (e) {
+          list = [rawData];
+        }
+      }
+
+      if (!list || list.length === 0) {
+        Alert.alert("Attenzione", "Nessun ingrediente trovato da aggiungere.");
+        setAddingToCart(false);
+        return;
+      }
+
+      // 2. RECUPERA PRODOTTI PARTNER
       const { data: partnerProducts } = await supabase
         .from('partner_products')
         .select('product_name, shop_url, keywords');
 
+      // 3. CREA I NUOVI OGGETTI
       const newItems = list.map((ingredient) => {
-        const ingredientString = safeRender(ingredient);
+        const ingredientString = safeRender(ingredient).replace(/["'[\]]/g, '').trim();
         const ingredientLower = ingredientString.toLowerCase();
         
-        const partnerMatch = partnerProducts?.find(p => {
+        const partnerMatch = partnerProducts?.find((p: any) => {
             const keys = p.keywords || [p.product_name];
-            return keys.some(key => ingredientLower.includes(key.toLowerCase()));
+            return keys.some((key: string) => ingredientLower.includes(key.toLowerCase()));
         });
 
         return {
-            id: Date.now() + Math.random().toString(), 
+            id: Date.now() + Math.random().toString(),
             name: ingredientString,
-            category: 'Ricetta: ' + recipe.title, 
+            category: recipe.title,
             is_bought: false,
             product_url: partnerMatch ? partnerMatch.shop_url : null,
             created_at: new Date().toISOString()
         };
       });
 
+      // 4. SALVATAGGIO
       const existingListJson = await AsyncStorage.getItem('@user_shopping_list');
-      const existingList = existingListJson ? JSON.parse(existingListJson) : [];
+      let existingList = [];
+      try {
+        existingList = existingListJson ? JSON.parse(existingListJson) : [];
+        if (!Array.isArray(existingList)) existingList = [];
+      } catch { existingList = []; }
+
       const updatedList = [...newItems, ...existingList];
       
       await AsyncStorage.setItem('@user_shopping_list', JSON.stringify(updatedList));
 
-      Alert.alert("🛒 Carrello Locale", "Ingredienti aggiunti con i link Live Better riconosciuti!");
+      Alert.alert("🛒 Carrello Aggiornato", `Aggiunti ${newItems.length} ingredienti alla lista!`);
+    
     } catch (e) {
-      Alert.alert("Errore", "Impossibile salvare localmente.");
-    } finally { setAddingToCart(false); }
+      console.error("Errore Carrello:", e);
+      Alert.alert("Errore", "Impossibile salvare nel carrello.");
+    } finally { 
+      setAddingToCart(false); 
+    }
   }
 
   if (loading || !recipe) return <View style={styles.center}><ActivityIndicator size="large" color="#00cec9" /></View>;
@@ -337,6 +371,8 @@ const styles = StyleSheet.create({
   controlsRow: { flexDirection: 'row', gap: 10 },
   controlBtn: { width: 44, height: 44, borderRadius: 15, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fab1a0' },
   btnReset: { width: 44, height: 44, borderRadius: 15, backgroundColor: '#222', justifyContent: 'center', alignItems: 'center' },
+  btnPause: { backgroundColor: '#fab1a0' },
+  btnPlay: { backgroundColor: '#fab1a0' },
   fabContainer: { position: 'absolute', bottom: Platform.OS === 'ios' ? 40 : 20, left: 20, right: 20 },
   fabButton: { backgroundColor: '#00cec9', height: 75, borderRadius: 25, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, elevation: 10, shadowColor: '#00cec9', shadowOpacity: 0.3, shadowRadius: 10 },
   fabTitle: { color: '#000', fontSize: 18, fontWeight: '900' },

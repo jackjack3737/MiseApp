@@ -19,25 +19,41 @@ export default function ShoppingListScreen() {
     return unsubscribe;
   }, [navigation]);
 
-  async function fetchLocalCart() {
+async function fetchLocalCart() {
+    // Non resettare lo stato a [] all'inizio, così se il caricamento fallisce
+    // l'utente vede comunque i dati vecchi invece di una schermata vuota.
     if (!refreshing) setLoading(true);
+    
     try {
       const savedList = await AsyncStorage.getItem('@user_shopping_list');
-      if (savedList) {
-        const parsedList = JSON.parse(savedList);
-        // Ordina: prima quelli da comprare, poi i più recenti
+      
+      // Se non c'è nulla sul disco, usciamo senza resettare nulla inutilmente
+      if (!savedList) {
+        setItems([]);
+        return;
+      }
+
+      const parsedList = JSON.parse(savedList);
+
+      if (Array.isArray(parsedList)) {
+        // Ordiniamo i dati
         const sortedList = parsedList.sort((a: any, b: any) => {
+          // Gestione date per evitare crash se created_at manca
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+
           if (a.is_bought === b.is_bought) {
-            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+            return dateB - dateA;
           }
           return a.is_bought ? 1 : -1;
         });
+
         setItems(sortedList);
-      } else {
-        setItems([]);
       }
     } catch (e) {
-      console.error("Errore caricamento locale:", e);
+      // In caso di errore (es. JSON corrotto), non cancelliamo nulla!
+      // Logghiamo solo l'errore per il debug.
+      console.error("❌ Errore durante il recupero del carrello:", e);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -51,21 +67,22 @@ export default function ShoppingListScreen() {
 
   const formatIngredientName = (rawName: any) => {
     try {
-      if (!rawName) return "";
-      if (typeof rawName === 'string' && !rawName.trim().startsWith('{')) {
-        return rawName.replace(/["'\[\]]/g, '').trim().replace(/^\w/, (c) => c.toUpperCase());
+      if (!rawName) return "Ingrediente";
+      
+      // Se per caso è rimasto salvato un oggetto intero {name: "...", quantity: ...}
+      if (typeof rawName === 'object') {
+          return rawName.name || JSON.stringify(rawName);
       }
-      const obj = typeof rawName === 'string' ? JSON.parse(rawName) : rawName;
-      if (obj && typeof obj === 'object') {
-        const q = obj.quantity || '';
-        const u = obj.unit || '';
-        const n = obj.name || '';
-        return `${q} ${u} ${n}`.trim().replace(/^\w/, (c) => c.toUpperCase());
+
+      // Se è una stringa, pulisci parentesi quadre, virgolette e spazi
+      if (typeof rawName === 'string') {
+        return rawName.replace(/["'[\]]/g, '').trim().replace(/^\w/, (c) => c.toUpperCase());
       }
+      
+      return String(rawName);
     } catch (e) {
-      return String(rawName).replace(/["'\[\]]/g, '').trim();
+      return "Ingrediente sconosciuto";
     }
-    return rawName;
   };
 
   async function toggleItem(id: string) {

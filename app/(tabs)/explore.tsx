@@ -3,7 +3,9 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../../src/lib/supabase';
 import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Clock, Flame, ArrowLeft, Search, WheatOff, MilkOff, Leaf, Zap } from 'lucide-react-native';
+// Sostituito SafeAreaView vecchio con quello nuovo per eliminare il warning
+import { SafeAreaView } from 'react-native-safe-area-context'; 
+import { Clock, Flame, User, Search, WheatOff, MilkOff, Zap } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 
@@ -152,19 +154,27 @@ export default function ExploreScreen() {
   );
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar barStyle="light-content" />
       
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <ArrowLeft size={24} color="#fff" />
-        </TouchableOpacity>
         <View style={styles.headerTitleGroup}>
             <Text style={[styles.headerSubtitle, { color: theme.color }]}>TARGET GIORNALIERO</Text>
             <Text style={styles.headerTitle}>{protocol.toUpperCase()}</Text>
         </View>
-        <View style={[styles.infoBox, { borderColor: theme.color }]}>
-            <Text style={[styles.infoText, { color: theme.color }]}>{maxKcal} kcal</Text>
+
+        <View style={styles.headerActions}>
+            <View style={[styles.infoBox, { borderColor: theme.color }]}>
+                <Text style={[styles.infoText, { color: theme.color }]}>{maxKcal} kcal</Text>
+            </View>
+            
+            {/* TASTO PROFILO AGGIUNTO */}
+            <TouchableOpacity 
+              onPress={() => router.push('/profile')} 
+              style={styles.profileBtn}
+            >
+              <User size={22} color="#fff" />
+            </TouchableOpacity>
         </View>
       </View>
 
@@ -181,7 +191,6 @@ export default function ExploreScreen() {
                 />
             </View>
 
-            {/* TASTO LIVE BETTER CON TESTO ESTESO */}
             <TouchableOpacity 
               style={[styles.liveBetterBtn, protocol === 'LiveBetter' && styles.liveBetterBtnActive]}
               onPress={() => setProtocol(protocol === 'LiveBetter' ? 'Keto' : 'LiveBetter')}
@@ -211,19 +220,36 @@ export default function ExploreScreen() {
           }
         />
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 20, justifyContent: 'space-between' },
-  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-  headerTitleGroup: { flex: 1, marginLeft: 15 },
+  header: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingHorizontal: 20, 
+    paddingTop: 10, 
+    paddingBottom: 20, 
+    justifyContent: 'space-between' 
+  },
+  headerTitleGroup: { flex: 1 },
   headerSubtitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 2 },
-  headerTitle: { color: '#fff', fontSize: 26, fontWeight: '900' },
-  infoBox: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 12, borderWidth: 1, backgroundColor: '#000' },
+  headerTitle: { color: '#fff', fontSize: 28, fontWeight: '900' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  profileBtn: { 
+    width: 44, 
+    height: 44, 
+    borderRadius: 14, 
+    backgroundColor: '#111', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    borderWidth: 1, 
+    borderColor: '#222' 
+  },
+  infoBox: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, backgroundColor: '#000' },
   infoText: { fontWeight: '900', fontSize: 13 },
   searchContainer: { paddingHorizontal: 20, marginBottom: 15 },
   searchRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },

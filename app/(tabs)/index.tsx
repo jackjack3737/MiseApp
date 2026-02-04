@@ -64,19 +64,21 @@ export default function IndexScreen() {
 
   const checkUserProfile = async () => {
     try {
-      // ⚠️ ATTENZIONE: Se non vedi la schermata di setup, togli il commento alla riga sotto,
-      // salva, aspetta il reload, e poi rimetti il commento.
-      await AsyncStorage.clear(); 
+      // 🚨 ASSICURATI CHE QUESTA RIGA SOTTO SIA SEMPRE COMMENTATA:
+      // await AsyncStorage.clear(); 
 
       const profileData = await AsyncStorage.getItem('@user_profile');
       if (profileData) {
-        // Se esiste, impostiamo il flag per il redirect
+        console.log("✅ Profilo trovato al boot!");
         setHasProfile(true);
+      } else {
+        console.log("ℹ️ Nessun profilo, avvio setup.");
       }
     } catch (e) {
       console.log('Errore check profilo:', e);
     } finally {
-      setIsLoading(false);
+      // Un piccolo delay di 500ms evita "sfarfallii" e assicura la lettura
+      setTimeout(() => setIsLoading(false), 500);
     }
   };
 
@@ -113,7 +115,6 @@ export default function IndexScreen() {
     if (isNaN(newVal)) newVal = 0;
 
     const costPerGram = type === 'f' ? 9 : 4;
-    // ... Logica di bilanciamento ...
     const newKcalTaken = newVal * costPerGram;
     if (newKcalTaken > kcal) newVal = Math.floor(kcal / costPerGram);
 
@@ -148,7 +149,7 @@ export default function IndexScreen() {
     handleMacroChange(type, (currentVal + delta).toString());
   }
 
-  // 3. SALVATAGGIO E REDIRECT
+  // 3. SALVATAGGIO E REDIRECT (BLINDATA)
   const handleGeneratePlan = async () => {
     try {
       const settings = {
@@ -156,14 +157,25 @@ export default function IndexScreen() {
         protocol: selectedProtocol,
         carbs,
         protein,
-        fat
+        fat,
+        lastUpdated: new Date().toISOString()
       };
+
+      // Salviamo
       await AsyncStorage.setItem('@user_profile', JSON.stringify(settings));
       
-      // Usa 'replace' invece di 'push' così l'utente non può tornare indietro al setup
-      router.replace('/(tabs)/explore');
+      // VERIFICA: Leggiamo subito per forzare il sistema a confermare la scrittura
+      const verify = await AsyncStorage.getItem('@user_profile');
+      
+      if (verify) {
+        console.log("💾 Dati salvati correttamente sul disco.");
+        router.replace('/(tabs)/explore');
+      } else {
+        Alert.alert("Errore", "Il disco è pieno o protetto. Non riesco a salvare.");
+      }
     } catch (e) {
       console.log("Errore salvataggio profilo", e);
+      Alert.alert("Errore", "Impossibile salvare il profilo.");
     }
   };
 
