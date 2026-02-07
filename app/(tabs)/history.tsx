@@ -3,7 +3,25 @@ import { StyleSheet, View, Text, TouchableOpacity, ScrollView, StatusBar, Dimens
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
-import { ChevronLeft, ChevronRight, Calendar, AlertCircle, CheckCircle2, Trash2, Edit3, X, Check, Activity } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Calendar, AlertCircle, CheckCircle2, Trash2, Edit3, X, Check, Activity, Moon, Flame } from 'lucide-react-native';
+
+// --- CONFIGURAZIONE BIO (Simulata per ora) ---
+// In futuro qui chiamerai una funzione che legge dal DB o da Health Connect per la data selezionata
+const getBioForDate = (date: string) => {
+    // Esempio di logica "finta" per popolare la UI
+    // Se la data è pari -> Sonno buono, se dispari -> Sonno cattivo
+    const dayNum = parseInt(date.split('-')[2]);
+    const isBadSleep = dayNum % 3 === 0;
+    
+    return {
+        sleepHours: isBadSleep ? 5.5 : 7.5,
+        sleepQuality: isBadSleep ? 'Critico' : 'Ottimo',
+        steps: 8000 + (dayNum * 100),
+        activeKcal: 350,
+        zone: isBadSleep ? 'Sedentario' : 'Zona 2 (Ibrido)',
+        reactorBonus: isBadSleep ? { c: 0, p: 10, f: 0 } : { c: 25, p: 20, f: 5 }
+    };
+};
 
 const { width } = Dimensions.get('window');
 const COLUMNS = 7;
@@ -17,12 +35,16 @@ const MONTH_NAMES = [
 export default function HistoryScreen() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  
+  // Dati
   const [historyData, setHistoryData] = useState<any>({});
   const [dayDetails, setDayDetails] = useState<any>(null);
+  const [bioData, setBioData] = useState<any>(null); // NUOVO: Stato per i dati bio
+  
   const [userTargets, setUserTargets] = useState({ kcal: 2000, carbs: 50 });
   const [loading, setLoading] = useState(true);
 
-  // --- STATO MODIFICA ---
+  // Modale
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
 
@@ -38,7 +60,6 @@ export default function HistoryScreen() {
           carbs: Number(p.targetCarbs) || (p.protocol === 'Keto' ? 30 : 150)
         });
       }
-
       await refreshHistory();
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -57,7 +78,7 @@ export default function HistoryScreen() {
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
 
-  // --- 2. ELABORAZIONE STORICO ---
+  // --- 2. ELABORAZIONE ---
   const processHistory = (logs: any[]) => {
     const processed: any = {};
 
@@ -70,7 +91,6 @@ export default function HistoryScreen() {
         };
       }
       
-      // Controllo se è un sintomo
       if (log.meal_type === 'SINTOMO') {
           processed[date].hasSymptom = true;
       } else {
@@ -88,22 +108,24 @@ export default function HistoryScreen() {
       const isCarbsOver = day.totalCarbs > userTargets.carbs;
       
       if (isKcalOver || isCarbsOver) day.status = 'bad';
-      else if (day.totalKcal > 0) day.status = 'good'; // Solo se c'è cibo
+      else if (day.totalKcal > 0) day.status = 'good';
       else day.status = 'neutral';
     });
 
     setHistoryData(processed);
     
-    if (processed[selectedDate]) {
-        setDayDetails(processed[selectedDate]);
-    } else {
-        setDayDetails(null);
-    }
+    // Aggiorna la vista corrente
+    updateCurrentView(selectedDate, processed);
   };
 
-  // --- 3. GESTIONE EDIT & DELETE ---
+  const updateCurrentView = (dateStr: string, dataMap: any) => {
+      setDayDetails(dataMap[dateStr] || null);
+      setBioData(getBioForDate(dateStr)); // Carica anche i dati bio finti
+  };
+
+  // --- 3. GESTIONE AZIONI ---
   const handleDelete = (id: string) => {
-      Alert.alert("Elimina", "Sicuro di voler cancellare questo elemento?", [
+      Alert.alert("Elimina", "Sicuro di voler cancellare?", [
           { text: "Annulla", style: "cancel" },
           { text: "Elimina", style: "destructive", onPress: async () => {
               const logsJson = await AsyncStorage.getItem('@user_daily_logs');
@@ -136,7 +158,7 @@ export default function HistoryScreen() {
       } catch (e) { Alert.alert("Errore", "Salvataggio fallito"); }
   };
 
-  // --- 4. LOGICA CALENDARIO ---
+  // --- 4. CALENDARIO ---
   const changeMonth = (delta: number) => {
     const newDate = new Date(currentMonth);
     newDate.setMonth(newDate.getMonth() + delta);
@@ -149,14 +171,14 @@ export default function HistoryScreen() {
     const dateStr = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
     
     setSelectedDate(dateStr);
-    setDayDetails(historyData[dateStr] || null);
+    updateCurrentView(dateStr, historyData);
   };
 
   const generateCalendarDays = () => {
     const year = currentMonth.getFullYear();
     const month = currentMonth.getMonth();
-    const firstDayOfMonth = new Date(year, month, 1).getDay(); 
-    const startDay = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1; 
+    const firstDay = new Date(year, month, 1).getDay(); 
+    const startDay = firstDay === 0 ? 6 : firstDay - 1; 
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     
     const grid = [];
@@ -175,33 +197,66 @@ export default function HistoryScreen() {
     const dayData = historyData[dateStr];
     const isSelected = dateStr === selectedDate;
     
-    // Background dinamico se selezionato
     let bgStyle = isSelected ? styles.selectedDayCell : {};
     if (dayData && !isSelected) {
-       if (dayData.hasSymptom && dayData.status === 'neutral') bgStyle = { backgroundColor: '#a29bfe15', borderColor: '#a29bfe30' }; // Solo Sintomo
+       if (dayData.hasSymptom && dayData.status === 'neutral') bgStyle = { backgroundColor: '#a29bfe15', borderColor: '#a29bfe30' };
        else if (dayData.status === 'good') bgStyle = { backgroundColor: '#00cec915', borderColor: 'transparent' };
        else if (dayData.status === 'bad') bgStyle = { backgroundColor: '#ff767515', borderColor: 'transparent' };
     }
 
     return (
-      <TouchableOpacity 
-        style={[styles.dayCell, bgStyle]} 
-        onPress={() => handleDayPress(item.day)}
-      >
+      <TouchableOpacity style={[styles.dayCell, bgStyle]} onPress={() => handleDayPress(item.day)}>
         <Text style={[styles.dayText, isSelected && {color:'#fff'}]}>{item.day}</Text>
-        
-        {/* CONTAINER PALLINI */}
         <View style={styles.dotsContainer}>
-            {/* Pallino Metabolico */}
             {dayData && dayData.status !== 'neutral' && (
                 <View style={[styles.statusDot, { backgroundColor: dayData.status === 'good' ? '#00cec9' : '#ff7675' }]} />
             )}
-            {/* Pallino Sintomo (Viola) */}
             {dayData && dayData.hasSymptom && (
                 <View style={[styles.statusDot, { backgroundColor: '#a29bfe' }]} />
             )}
         </View>
       </TouchableOpacity>
+    );
+  };
+
+  // --- COMPONENTE CARD BIO ---
+  const BioStatsCard = ({ bio }: any) => {
+    if (!bio) return null;
+    const isSleepBad = bio.sleepHours < 6;
+    
+    return (
+        <View style={styles.bioContainer}>
+             {/* HEADER SONNO */}
+             <View style={[styles.bioRow, isSleepBad ? styles.bioRowWarn : styles.bioRowOk]}>
+                <View style={{flexDirection:'row', alignItems:'center', gap: 10}}>
+                    <Moon size={18} color={isSleepBad ? "#ff7675" : "#00cec9"} />
+                    <View>
+                        <Text style={styles.bioLabel}>SONNO ({bio.sleepHours}h)</Text>
+                        <Text style={styles.bioSub}>{isSleepBad ? "Cortisolo Alto" : "Recupero OK"}</Text>
+                    </View>
+                </View>
+                {isSleepBad ? <AlertCircle size={16} color="#ff7675"/> : <CheckCircle2 size={16} color="#00cec9"/>}
+            </View>
+
+            {/* BODY ATTIVITÀ */}
+            <View style={styles.bioContent}>
+                 <View style={{flexDirection:'row', justifyContent:'space-between', marginBottom: 10}}>
+                    <View style={{flexDirection:'row', gap: 8}}>
+                        <Activity size={16} color="#fdcb6e" />
+                        <Text style={styles.bioText}>{bio.zone}</Text>
+                    </View>
+                    <Text style={styles.bioVal}>{bio.steps} passi</Text>
+                 </View>
+                 
+                 <View style={styles.bonusRow}>
+                    <Text style={styles.bonusLabel}>BONUS ATTIVATI:</Text>
+                    <View style={{flexDirection:'row', gap: 8}}>
+                        <Text style={[styles.bonusTag, {color:'#00cec9'}]}>+{bio.reactorBonus.c}g C</Text>
+                        <Text style={[styles.bonusTag, {color:'#74b9ff'}]}>+{bio.reactorBonus.p}g P</Text>
+                    </View>
+                 </View>
+            </View>
+        </View>
     );
   };
 
@@ -222,6 +277,7 @@ export default function HistoryScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+        {/* CALENDARIO */}
         <View style={styles.calendarContainer}>
             <View style={styles.weekHeader}>
                 {['L','M','M','G','V','S','D'].map((d, i) => <Text key={i} style={styles.weekDayText}>{d}</Text>)}
@@ -235,32 +291,30 @@ export default function HistoryScreen() {
             />
         </View>
 
+        {/* DETTAGLIO GIORNO */}
         <View style={styles.detailSection}>
             <Text style={styles.detailDateTitle}>
                 {new Date(selectedDate).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }).toUpperCase()}
             </Text>
 
+            {/* SEZIONE 1: DATI BIO (NUOVA) */}
+            <Text style={styles.sectionLabel}>METABOLISMO & SONNO</Text>
+            <BioStatsCard bio={bioData} />
+
+            {/* SEZIONE 2: DIARIO CIBO */}
+            <Text style={[styles.sectionLabel, {marginTop: 25}]}>ALIMENTAZIONE</Text>
+            
             {dayDetails ? (
                 <>
-                    {/* AVVISO SINTOMI NEL DETTAGLIO */}
                     {dayDetails.hasSymptom && (
                         <View style={styles.symptomAlertCard}>
                             <Activity size={18} color="#a29bfe" />
-                            <Text style={styles.symptomAlertText}>SINTOMI REGISTRATI IN QUESTA DATA</Text>
+                            <Text style={styles.symptomAlertText}>SINTOMI REGISTRATI</Text>
                         </View>
                     )}
 
                     <View style={styles.statsCard}>
-                        <View style={styles.statRow}>
-                            <Text style={styles.statLabel}>STATUS METABOLICO</Text>
-                            <View style={[styles.statusBadge, { backgroundColor: dayDetails.status === 'good' ? '#00cec9' : (dayDetails.status === 'bad' ? '#ff7675' : '#333') }]}>
-                                {dayDetails.status === 'good' ? <CheckCircle2 size={12} color="#000"/> : <AlertCircle size={12} color="#000"/>}
-                                <Text style={styles.statusText}>{dayDetails.status === 'good' ? 'OPTIMAL' : (dayDetails.status === 'bad' ? 'SFORO' : 'NEUTRO')}</Text>
-                            </View>
-                        </View>
-                        
-                        <View style={styles.divider} />
-
+                         {/* MACRO TOTALI */}
                         <View style={styles.macroGrid}>
                             <View style={styles.macroBox}><Text style={[styles.macroVal, {color: '#fdcb6e'}]}>{Math.round(dayDetails.totalCarbs)}g</Text><Text style={styles.macroSub}>CARBS</Text></View>
                             <View style={styles.macroBox}><Text style={[styles.macroVal, {color: '#74b9ff'}]}>{Math.round(dayDetails.totalProt)}g</Text><Text style={styles.macroSub}>PROT</Text></View>
@@ -269,7 +323,7 @@ export default function HistoryScreen() {
                         </View>
                     </View>
 
-                    <Text style={styles.mealsTitle}>DIARIO ALIMENTARE</Text>
+                    {/* LISTA PASTI */}
                     {dayDetails.meals.map((meal: any, index: number) => (
                         <View key={index} style={[styles.mealItem, meal.meal_type === 'SINTOMO' && styles.mealItemSymptom]}>
                             <View style={[styles.mealTimeLine, meal.meal_type === 'SINTOMO' && {backgroundColor:'#a29bfe'}]} />
@@ -295,8 +349,8 @@ export default function HistoryScreen() {
             ) : (
                 <View style={styles.emptyState}>
                     <Activity size={40} color="#333" />
-                    <Text style={styles.emptyText}>NESSUN DATO REGISTRATO</Text>
-                    <Text style={styles.emptySub}>Non hai tracciato nulla in questa data.</Text>
+                    <Text style={styles.emptyText}>NESSUN DATO CIBO</Text>
+                    <Text style={styles.emptySub}>Il diario alimentare è vuoto.</Text>
                 </View>
             )}
         </View>
@@ -313,13 +367,8 @@ export default function HistoryScreen() {
             
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.inputLabel}>NOME ALIMENTO</Text>
-              <TextInput 
-                style={styles.input} 
-                value={editingItem?.food_name} 
-                onChangeText={(t) => setEditingItem({...editingItem, food_name: t})}
-                placeholderTextColor="#444"
-              />
-
+              <TextInput style={styles.input} value={editingItem?.food_name} onChangeText={(t) => setEditingItem({...editingItem, food_name: t})} placeholderTextColor="#444"/>
+              
               <View style={styles.inputRow}>
                 <View style={{flex:1}}>
                   <Text style={styles.inputLabel}>KCAL</Text>
@@ -370,39 +419,42 @@ const styles = StyleSheet.create({
   selectedDayCell: { borderColor: '#fff', backgroundColor: '#222' },
   emptyCell: { backgroundColor: 'transparent', borderWidth: 0 },
   dayText: { fontSize: 14, fontWeight: '700', color: '#636e72' },
-  
-  // CONTAINER PALLINI
   dotsContainer: { position: 'absolute', bottom: 6, flexDirection: 'row', gap: 4 },
   statusDot: { width: 5, height: 5, borderRadius: 2.5 },
 
   detailSection: { padding: 25, marginTop: 10 },
-  detailDateTitle: { color: '#fff', fontSize: 16, fontWeight: '900', marginBottom: 20, letterSpacing: 1 },
-  
-  // ALERT SINTOMI
+  detailDateTitle: { color: '#fff', fontSize: 16, fontWeight: '900', marginBottom: 15, letterSpacing: 1 },
+  sectionLabel: { color: '#636e72', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 10 },
+
+  // BIO CARD
+  bioContainer: { backgroundColor: '#0a0a0a', borderRadius: 20, borderWidth: 1, borderColor: '#1a1a1a', overflow: 'hidden' },
+  bioRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#1a1a1a' },
+  bioRowWarn: { backgroundColor: '#ff767515', borderColor: '#ff767530' },
+  bioRowOk: { backgroundColor: '#00cec905' },
+  bioLabel: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  bioSub: { color: '#888', fontSize: 10 },
+  bioContent: { padding: 15 },
+  bioText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  bioVal: { color: '#666', fontSize: 12 },
+  bonusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#1a1a1a' },
+  bonusLabel: { color: '#444', fontSize: 10, fontWeight: '900' },
+  bonusTag: { fontSize: 10, fontWeight: '900', backgroundColor: '#111', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+
   symptomAlertCard: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#a29bfe15', padding: 15, borderRadius: 16, marginBottom: 20, borderWidth: 1, borderColor: '#a29bfe30' },
   symptomAlertText: { color: '#a29bfe', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
 
-  statsCard: { backgroundColor: '#0a0a0a', padding: 20, borderRadius: 24, borderWidth: 1, borderColor: '#1a1a1a', marginBottom: 30 },
-  statRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  statLabel: { color: '#636e72', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
-  statusText: { color: '#000', fontSize: 10, fontWeight: '900' },
-  divider: { height: 1, backgroundColor: '#222', marginBottom: 15 },
-  
+  statsCard: { backgroundColor: '#0a0a0a', padding: 20, borderRadius: 24, borderWidth: 1, borderColor: '#1a1a1a', marginBottom: 20 },
   macroGrid: { flexDirection: 'row', justifyContent: 'space-between' },
   macroBox: { alignItems: 'center' },
   macroVal: { fontSize: 18, fontWeight: '900', marginBottom: 4 },
   macroSub: { color: '#444', fontSize: 9, fontWeight: '800' },
 
-  mealsTitle: { color: '#636e72', fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 15 },
-  
   mealItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
   mealItemSymptom: { opacity: 0.8 },
   mealTimeLine: { width: 2, height: '100%', backgroundColor: '#222', marginRight: 15, borderRadius: 1 },
   mealContent: { flex: 1 },
   mealName: { color: '#fff', fontSize: 14, fontWeight: '700', marginBottom: 2 },
   mealMeta: { color: '#636e72', fontSize: 11 },
-  
   actionsBox: { flexDirection: 'row', gap: 15, paddingLeft: 10 },
   actionIcon: { padding: 5 },
 

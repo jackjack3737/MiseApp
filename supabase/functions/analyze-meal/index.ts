@@ -6,18 +6,20 @@ const corsHeaders = {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
 
   try {
     const { query } = await req.json()
-    console.log(`🍔 Richiesta cibo: "${query}"`)
+    console.log(`🍔 Analisi richiesta per: "${query}"`)
 
     const apiKey = Deno.env.get('GEMINI_API_KEY')
-    if (!apiKey) throw new Error('API Key mancante')
+    if (!apiKey) throw new Error('GEMINI_API_KEY mancante su Supabase')
 
-    // USIAMO 1.5 FLASH (È veloce e non si blocca sui limiti del piano free)
+    // ✅ ORA USIAMO IL MODELLO 2.0 FLASH (Dalla tua lista)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -25,19 +27,15 @@ Deno.serve(async (req) => {
           contents: [{
             parts: [{
               text: `
-                Analizza: "${query}".
-                Se è un brand (McDonalds, Burger King, ecc) usa i valori ufficiali.
-                Se è generico, stima una porzione media.
-                
-                Restituisci SOLO un JSON crudo (niente markdown, niente ```json, niente testo introduttivo).
-                Struttura:
+                Sei un nutrizionista. Analizza: "${query}".
+                Rispondi SOLO con questo JSON (no markdown):
                 {
-                  "name": "Nome cibo",
-                  "weight_g": 100,
+                  "food_name": "Nome cibo",
                   "kcal": 0,
-                  "c": 0,
-                  "p": 0,
-                  "f": 0
+                  "carbs": 0,
+                  "proteins": 0,
+                  "fats": 0,
+                  "weight_g": 100
                 }
               `
             }]
@@ -47,35 +45,30 @@ Deno.serve(async (req) => {
     )
 
     if (!response.ok) {
-      const err = await response.text()
-      throw new Error(`Gemini Error: ${err}`)
+      const errText = await response.text()
+      console.error("❌ Errore Google:", errText)
+      throw new Error(`Errore API Gemini (${response.status}): ${errText}`)
     }
 
     const data = await response.json()
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text
     
-    // --- PULIZIA CHIRURGICA DEL JSON ---
-    let rawText = data.candidates[0].content.parts[0].text
-    console.log("Raw da Gemini:", rawText) // Vediamo cosa risponde nei log
+    if (!rawText) throw new Error("Gemini ha risposto vuoto.")
 
-    // 1. Rimuovi i backticks del markdown (```json ... ```)
-    let cleanText = rawText.replace(/```json/g, '').replace(/```/g, '')
-    
-    // 2. Trova la prima parentesi graffa aperta '{' e l'ultima chiusa '}'
+    let cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim()
     const firstBrace = cleanText.indexOf('{')
     const lastBrace = cleanText.lastIndexOf('}')
-    
-    if (firstBrace !== -1 && lastBrace !== -1) {
-      cleanText = cleanText.substring(firstBrace, lastBrace + 1)
-    }
+    if (firstBrace !== -1 && lastBrace !== -1) cleanText = cleanText.substring(firstBrace, lastBrace + 1)
 
     const result = JSON.parse(cleanText)
+    console.log("✅ Analisi completata:", result.food_name)
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
 
-  } catch (error) {
-    console.error("🔥 ERRORE:", error)
+  } catch (error: any) {
+    console.error("🔥 Errore:", error.message)
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
