@@ -1,10 +1,19 @@
 // utils/smart-algorithm.ts
 
+/**
+ * BIO-HACKING CORE ENGINE v2.0
+ * Algoritmo di regolazione metabolica basato su feedback a circuito chiuso.
+ * * INPUT: Dati biometrici (Passi, Calorie, Sonno) + Dati Clinici (Sintomi)
+ * OUTPUT: Adattamento Nutrizionale di Precisione
+ */
+
 export interface BioData {
   steps: number;
   activeCalories: number;
-  averageHeartRate?: number; // Opzionale (se manca, stimiamo)
-  sleepHours?: number;       // Opzionale (se manca, assumiamo sonno regolare)
+  averageHeartRate?: number;
+  sleepHours?: number;      
+  symptomFactor?: number;   // 0.5 (Severo) -> 1.0 (Nessun sintomo) - Da MedicalScreen
+  symptomName?: string;     // Es: "Gonfiore Addominale"
   protocol: 'Keto' | 'Carnivore' | 'Paleo' | 'LowCarb';
 }
 
@@ -12,115 +21,112 @@ export interface MacroAdjustment {
   bonusCarbs: number;
   bonusProtein: number;
   bonusFat: number;
-  intensityZone: string;   // Es: "Corsa (Zona 3)"
-  sleepFeedback: string;   // Es: "Cortisolo Alto: Carbo ridotti"
-  burnScore: number;       // 0-100 (Punteggio Efficienza)
+  intensityZone: string;   
+  sleepFeedback: string;   
+  burnScore: number;       
 }
 
 export const calculateMetabolicReactor = (data: BioData): MacroAdjustment => {
-  const { steps, activeCalories, averageHeartRate, sleepHours, protocol } = data;
+  const { steps, activeCalories, averageHeartRate, sleepHours, protocol, symptomFactor = 1.0, symptomName } = data;
 
-  // --- 1. FATTORE SONNO (Il Freno al Cortisolo) ---
-  // Se dormi poco (<6h), il cortisolo sale e l'insulina funziona male.
-  // L'algoritmo "taglia" i carboidrati bonus per evitare che diventino grasso.
-  let sleepFactor = 1.0;
-  let sleepMessage = "Dati sonno non disponibili";
+  // --- 1. K_SLEEP: Coefficiente di Recupero Neurale (0.5 - 1.1) ---
+  // Il sonno regola la sensibilità insulinica. 
+  // Dormire poco = Cortisolo Alto = Zucchero ematico instabile.
+  let kSleep = 1.0;
+  let bioFeedback = "🟢 BIOSISTEMA STABILE";
 
-  if (sleepHours !== undefined) {
-      if (sleepHours < 5.5) {
-          sleepFactor = 0.5; // DIMEZZIAMO i bonus carbo (Protezione Insulina)
-          sleepMessage = "⚠️ SONNO CRITICO (<5.5h): Cortisolo alto. Carboidrati ridotti del 50%.";
+  if (sleepHours !== undefined && sleepHours > 0) {
+      if (sleepHours < 5.0) {
+          kSleep = 0.5; // CRITICO: Taglio 50% Carbo
+          bioFeedback = "🔴 CORTISOLO CRITICO (<5h)";
       } else if (sleepHours < 6.5) {
-          sleepFactor = 0.8; // Penalità leggera
-          sleepMessage = "⚠️ SONNO SCARSO: Sensibilità insulinica ridotta.";
+          kSleep = 0.8; // STRESS: Taglio 20%
+          bioFeedback = "🟠 RECUPERO INCOMPLETO";
       } else if (sleepHours > 7.5) {
-          sleepFactor = 1.1; // Bonus recupero!
-          sleepMessage = "✅ SONNO OTTIMALE: Metabolismo in assetto di recupero.";
-      } else {
-          sleepMessage = "⚖️ SONNO REGOLARE: Parametri stabili.";
+          kSleep = 1.1; // ANABOLIC PRIME: Bonus 10%
+          bioFeedback = "🟢 RECUPERO OTTIMALE";
       }
   }
 
-  // --- 2. INTENSITÀ (Cuore e Bio-Meccanica) ---
-  let intensityFactor = 1.0;
-  let detectedZone = "Sedentario";
-
-  // A. Analisi Cardiaca (Massima Precisione)
-  if (averageHeartRate && averageHeartRate > 0) {
-      if (averageHeartRate < 100) {
-          detectedZone = "Camminata/Zona 1 (Brucia Grassi)";
-          intensityFactor = 0.8; // Bassa necessità di ricarica
-      } else if (averageHeartRate < 135) {
-          detectedZone = "Moderata/Zona 2 (Ibrido)";
-          intensityFactor = 1.0; 
-      } else {
-          detectedZone = "Intensa/Zona 3+ (Brucia Glicogeno)";
-          intensityFactor = 1.6; // Alta necessità di ricarica
-      }
-  } 
-  // B. Fallback (Se non abbiamo il battito, usiamo la densità calorica)
-  else {
-      const caloriesPerStep = steps > 0 ? activeCalories / steps : 0;
-      // Camminata: ~0.04 kcal/passo | Corsa: ~0.10 kcal/passo
-      if (caloriesPerStep > 0.08) {
-          detectedZone = "Alta Intensità (Stimata)";
-          intensityFactor = 1.5;
-      } else {
-          detectedZone = "Bassa Intensità (Stimata)";
-          intensityFactor = 0.8;
-      }
+  // --- 2. K_SYMPTOM: Coefficiente di Infiammazione (0.5 - 1.0) ---
+  // Se l'utente ha segnalato un sintomo (es. Gonfiore), il sistema Medical
+  // ha passato un fattore < 1.0. Questo ha priorità assoluta.
+  let kSymptom = symptomFactor; 
+  if (kSymptom < 1.0 && symptomName) {
+      bioFeedback = `⚠️ PROTOCOLLO ANTINFIAMMATORIO (${symptomName})`;
   }
 
-  // --- 3. CALCOLO DEL RECUPERO (The Core) ---
-  
-  // Calorie base da "restituire" per il recupero
-  const recoveryCalories = activeCalories * 0.45 * intensityFactor;
+  // --- 3. ANALISI INTENSITÀ (Carico di Lavoro) ---
+  let intensityMult = 1.0;
+  let zoneLabel = "REST";
 
-  let bonusC = 0, bonusP = 0, bonusF = 0;
+  // Analisi basata su Calorie/Passo (Efficienza Meccanica)
+  const loadDensity = steps > 0 ? activeCalories / steps : 0;
 
+  if (loadDensity > 0.08) { 
+      // Alta intensità (Corsa/HIIT) -> Deplezione Glicogeno -> Serve ricarica
+      zoneLabel = "AEROBIC ZONE (Z3+)";
+      intensityMult = 1.5;
+  } else if (steps > 8000) {
+      // Volume alto, bassa intensità -> Ossidazione Grassi
+      zoneLabel = "LISS / FAT BURN (Z2)";
+      intensityMult = 1.0; 
+  } else {
+      zoneLabel = "SEDENTARY / RECOVERY";
+      intensityMult = 0.8;
+  }
+
+  // --- 4. CALCOLO ENERGETICO (The Engine) ---
+  // Calorie "restituibili" per il recupero muscolare
+  const recoveryKcal = activeCalories * 0.50 * intensityMult;
+
+  let rawC = 0, rawP = 0, rawF = 0;
+
+  // --- 5. LOGICA DEI PROTOCOLLI ---
   if (protocol === 'Keto') {
-      // LOGICA KETO:
-      // - Carbo: Solo se intensità alta (>1.2) E moltiplicati per il fattore sonno.
-      // - Proteine: Sempre necessarie per riparare i danni muscolari.
-      // - Grassi: Energia pulita.
-      
-      if (intensityFactor > 1.2) {
-          const baseCarbBonus = (recoveryCalories * 0.25) / 4;
-          bonusC = Math.floor(baseCarbBonus * sleepFactor); // Applichiamo il freno sonno
-      } else {
-          bonusC = 0; // Se cammini in Keto, niente carbo extra.
+      // KETO: Carbo solo se intensità alta, altrimenti Grassi
+      if (intensityMult > 1.2) {
+          rawC = (recoveryKcal * 0.20) / 4; // TKD (Targeted Keto)
       }
-      
-      bonusP = Math.floor((recoveryCalories * 0.45) / 4);
-      bonusF = Math.floor((recoveryCalories * 0.30) / 9);
+      rawP = (recoveryKcal * 0.40) / 4; // Riparazione tessuti
+      rawF = (recoveryKcal * 0.40) / 9; // Carburante primario
 
   } else if (protocol === 'Carnivore') {
-      // LOGICA CARNIVORE: Zero Carbo sempre. Tutto in Proteine/Grassi.
-      bonusC = 0;
-      bonusP = Math.floor((recoveryCalories * 0.60) / 4);
-      bonusF = Math.floor((recoveryCalories * 0.40) / 9);
+      // CARNIVORE: Zero Carb Assoluto. Gluconeogenesi dalle proteine.
+      rawC = 0;
+      rawP = (recoveryKcal * 0.55) / 4;
+      rawF = (recoveryKcal * 0.45) / 9;
 
-  } else {
-      // LOGICA PALEO / LOWCARB: Più tolleranza.
-      const baseCarbBonus = (recoveryCalories * 0.45) / 4;
-      bonusC = Math.floor(baseCarbBonus * sleepFactor); // Anche qui il sonno conta!
-      
-      bonusP = Math.floor((recoveryCalories * 0.35) / 4);
-      bonusF = Math.floor((recoveryCalories * 0.20) / 9);
+  } else if (protocol === 'LowCarb' || protocol === 'Paleo') {
+      // FLESSIBILE: Ricarica glicogeno moderata
+      rawC = (recoveryKcal * 0.40) / 4;
+      rawP = (recoveryKcal * 0.30) / 4;
+      rawF = (recoveryKcal * 0.30) / 9;
   }
 
-  // --- 4. SICUREZZA (Safety Caps) ---
-  const maxCarbBonus = protocol === 'Keto' || protocol === 'Carnivore' ? 50 : 250;
+  // --- 6. APPLICAZIONE COEFFICIENTI DI SMORZAMENTO (NASA LOGIC) ---
+  // Formula finale: Bonus = (CalcoloBase) * (FattoreSonno) * (FattoreSintomo)
+  // Se stai male o dormi poco, i carboidrati scendono a zero rapidamente.
   
-  // Calcolo Punteggio Brucia-Grassi (0-100) per la UI
-  const score = Math.min(100, Math.floor((activeCalories / 800) * 100));
+  const finalC = Math.floor(rawC * kSleep * kSymptom);
+  
+  // Le proteine non vengono mai tagliate dai sintomi (servono per guarire), 
+  // anzi aumentano leggermente se c'è stress per prevenire catabolismo.
+  const recoveryBonus = (kSleep < 1 || kSymptom < 1) ? 1.1 : 1.0;
+  const finalP = Math.floor(rawP * recoveryBonus);
+  
+  // I grassi compensano parzialmente il taglio calorico, ma senza esagerare
+  const finalF = Math.floor(rawF * kSleep);
+
+  // Calcolo Punteggio Efficienza Metabolica (0-100)
+  const score = Math.min(100, Math.floor((activeCalories / 600) * 100 * kSleep * kSymptom));
 
   return {
-    bonusCarbs: Math.min(bonusC, maxCarbBonus),
-    bonusProtein: bonusP,
-    bonusFat: bonusF,
-    intensityZone: detectedZone,
-    sleepFeedback: sleepMessage,
+    bonusCarbs: finalC,
+    bonusProtein: finalP,
+    bonusFat: finalF,
+    intensityZone: zoneLabel,
+    sleepFeedback: bioFeedback,
     burnScore: score
   };
 };
