@@ -1,9 +1,8 @@
+import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import React from 'react';
 import { Platform, StyleSheet } from 'react-native';
-import { Search, ShoppingCart, PlusCircle, Stethoscope, Calendar } from 'lucide-react-native';
-
-const TECH_GREEN = '#39FF14'; // Il tuo nuovo verde tecnico
+import { DS, TYPO } from '../../constants/designSystem';
 
 export default function TabLayout() {
   return (
@@ -11,87 +10,75 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: TECH_GREEN, // CAMBIATO DA AZZURRO A VERDE
-        tabBarInactiveTintColor: '#2d5a27', // Un verde molto scuro per le icone inattive
+        tabBarActiveTintColor: DS.accent,
+        tabBarInactiveTintColor: DS.tabInactive,
         tabBarLabelStyle: styles.tabBarLabel,
-        tabBarHideKeyboard: true,
-      }}>
-      
-      {/* 1. ESPLORA */}
+      }}
+    >
+      {/* 1. HOME — "Oggi" */}
       <Tabs.Screen
-        name="explore"
+        name="home"
         options={{
-          title: 'Esplora',
-          tabBarIcon: ({ color }) => <Search size={22} color={color} />,
+          title: 'Oggi',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={24} color={color} />
+          ),
         }}
       />
-
-      {/* 2. BIO-ADVISOR */}
-      <Tabs.Screen
-        name="medical"
-        options={{
-          title: 'Advisor',
-          tabBarIcon: ({ color }) => <Stethoscope size={22} color={color} />,
-        }}
-      />
-
-      {/* 3. TRACKER */}
+      {/* 2. DIARIO — "Pasti" (Tracker) */}
       <Tabs.Screen
         name="tracker"
         options={{
-          title: 'Tracker',
-          tabBarIcon: ({ color }) => <PlusCircle size={28} color={color} strokeWidth={2.5} />,
+          title: 'Pasti',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'restaurant' : 'restaurant-outline'} size={24} color={color} />
+          ),
         }}
       />
-
-      {/* 4. STORICO */}
+      {/* 3. CORPO — salute e dati (BioStatus) */}
       <Tabs.Screen
-        name="history"
+        name="biostatus"
         options={{
-          title: 'Storico',
-          tabBarIcon: ({ color }) => <Calendar size={22} color={color} />,
+          title: 'Corpo',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'pulse' : 'pulse-outline'} size={24} color={color} />
+          ),
         }}
       />
-
-      {/* 5. SPESA */}
+      {/* 4. TU — Profilo */}
       <Tabs.Screen
-        name="cart"
+        name="profile"
         options={{
-          title: 'Spesa',
-          tabBarIcon: ({ color }) => <ShoppingCart size={22} color={color} />,
+          title: 'Tu',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
+          ),
         }}
       />
 
-      {/* HIDE: Setup e Index */}
+      {/* Schermate secondarie: nascoste dalla tab bar, raggiungibili via Stack (router.push) */}
+      <Tabs.Screen name="history" options={{ href: null }} />
+      <Tabs.Screen name="cart" options={{ href: null }} />
+      <Tabs.Screen name="medical" options={{ href: null }} />
+      <Tabs.Screen name="explore" options={{ href: null }} />
       <Tabs.Screen name="index" options={{ href: null }} />
-      <Tabs.Screen name="setup" options={{ href: null }} />
-      <Tabs.Screen name="profile" options={{ href: null }} />
     </Tabs>
   );
 }
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: '#000',
-    borderTopColor: '#1b3517', // Bordo verde scurissimo
+    backgroundColor: DS.tabBg,
+    borderTopColor: DS.border,
     borderTopWidth: 1,
-    height: Platform.OS === 'ios' ? 115 : 95, 
-    paddingBottom: Platform.OS === 'ios' ? 45 : 35, 
+    height: Platform.OS === 'ios' ? 120 : 96,
+    paddingBottom: Platform.OS === 'ios' ? 52 : 36,
     paddingTop: 12,
     position: 'absolute',
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    elevation: 20,
-    shadowColor: TECH_GREEN, // CAMBIATO DA AZZURRO A VERDE
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
+    elevation: 0,
+    shadowOpacity: 0,
   },
   tabBarLabel: {
-    fontSize: 9,
-    fontWeight: '900',
-    marginTop: 4,
-    textTransform: 'uppercase',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', // Font tecnico anche nelle Tab
+    ...TYPO.caption,
   },
 });

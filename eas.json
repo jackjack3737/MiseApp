@@ -8,18 +8,21 @@
       "developmentClient": true,
       "distribution": "internal"
     },
+    "Ketolabdebug": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": { "buildType": "apk", "image": "latest" },
+      "env": { "APP_DISPLAY_NAME": "Ketolabdebug" }
+    },
     "preview": {
-      "android": {
-        "buildType": "apk",
-        "image": "latest"
-      },
-      "distribution": "internal"
+      "android": { "buildType": "apk", "image": "latest" },
+      "distribution": "internal",
+      "env": { "NODE_ENV": "production" }
     },
     "production": {
-      "android": {
-        "image": "latest"
-      },
-      "autoIncrement": true
+      "android": { "image": "latest" },
+      "autoIncrement": true,
+      "env": { "NODE_ENV": "production" }
     }
   },
   "submit": {

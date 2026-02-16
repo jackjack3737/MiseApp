@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DS } from '../../constants/designSystem';
 
 const STORAGE_KEY = '@user_profile';
 
@@ -30,22 +31,15 @@ export default function IndexScreen() {
         
         // 2. Se NON esiste (o è corrotto), crealo silenziosamente
         if (!existingProfile) {
-          console.log(">> SYSTEM INIT: Profilo non trovato. Creazione Default (2000 kcal)...");
           await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_PROFILE));
-          
-          // Imposta flag di sistema
           await AsyncStorage.setItem('@is_premium', 'false');
-        } else {
-           console.log(">> SYSTEM INIT: Profilo caricato.");
         }
 
         // 3. Reindirizza IMMEDIATAMENTE al Tracker
         // Nota: Se preferisci andare alla Home (Mixer), cambia in router.replace('/(tabs)');
         router.replace('/(tabs)/tracker'); 
 
-      } catch (e) {
-        console.error("CRITICAL ERROR INIT:", e);
-        // Fallback di sicurezza: vai comunque al tracker per non bloccare l'app
+      } catch (_) {
         router.replace('/(tabs)/tracker');
       }
     };
@@ -56,8 +50,8 @@ export default function IndexScreen() {
 
   // Spinner di caricamento (stile Bio-Lab)
   return (
-    <View style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }}>
-      <ActivityIndicator size="large" color="#00FF80" />
+    <View style={{ flex: 1, backgroundColor: DS.bg, justifyContent: 'center', alignItems: 'center' }}>
+      <ActivityIndicator size="large" color={DS.accent} />
     </View>
   );
 }

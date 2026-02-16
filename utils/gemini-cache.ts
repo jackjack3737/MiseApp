@@ -3,6 +3,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Cambiamo la chiave in v2 per forzare il sistema a ignorare i vecchi errori salvati
 const GEMINI_CACHE_KEY = '@gemini_food_cache_v2';
 
+/** Converte valore in number (rimuove "g", spazi, ecc.). */
+function ensureNumber(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && !Number.isNaN(value)) return value;
+  if (typeof value === 'string') {
+    const n = parseFloat(value.replace(/[^0-9.,-]/g, '').replace(',', '.'));
+    return Number.isNaN(n) ? fallback : n;
+  }
+  return fallback;
+}
+
 export const getFoodFromAI = async (userInput: string) => {
   try {
     const query = userInput.toLowerCase().trim();
@@ -37,7 +47,36 @@ export const getFoodFromAI = async (userInput: string) => {
       throw new Error(`Errore Supabase: ${response.status}`);
     }
 
-    const foodData = await response.json();
+    let foodData: any = await response.json();
+
+    // Pulizia: se la risposta è una stringa (JSON grezzo), rimuovi backticks/markdown e caratteri di controllo, poi parsifica
+    if (typeof foodData === 'string') {
+      let stripped = foodData.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const firstBrace = stripped.indexOf('{');
+      const lastBrace = stripped.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1) {
+        stripped = stripped.substring(firstBrace, lastBrace + 1).replace(/[\u0000-\u001F\u007F]/g, ' ');
+        try {
+          foodData = JSON.parse(stripped);
+        } catch {
+          foodData = {};
+        }
+      } else {
+        foodData = {};
+      }
+    }
+    // Normalizza: valori nutrizionali devono essere number, non stringhe
+    if (foodData && !foodData.isText) {
+      foodData = {
+        ...foodData,
+        weight_g: ensureNumber(foodData.weight_g, 100),
+        kcal: ensureNumber(foodData.kcal, 0),
+        carbs: ensureNumber(foodData.carbs, 0),
+        proteins: ensureNumber(foodData.proteins, 0),
+        fats: ensureNumber(foodData.fats, 0),
+        isText: Boolean(foodData.isText),
+      };
+    }
 
     // 2. FILTRO DI SICUREZZA E SALVATAGGIO
     // Salviamo se: 

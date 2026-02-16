@@ -14,7 +14,7 @@ export interface BioData {
   sleepHours?: number;      
   symptomFactor?: number;   // 0.5 (Severo) -> 1.0 (Nessun sintomo) - Da MedicalScreen
   symptomName?: string;     // Es: "Gonfiore Addominale"
-  protocol: 'Keto' | 'Carnivore' | 'Paleo' | 'LowCarb';
+  protocol: 'Keto' | 'Low Carb' | 'LowCarb' | 'Bilanciata' | 'Personalizza';
 }
 
 export interface MacroAdjustment {
@@ -91,14 +91,8 @@ export const calculateMetabolicReactor = (data: BioData): MacroAdjustment => {
       rawP = (recoveryKcal * 0.40) / 4; // Riparazione tessuti
       rawF = (recoveryKcal * 0.40) / 9; // Carburante primario
 
-  } else if (protocol === 'Carnivore') {
-      // CARNIVORE: Zero Carb Assoluto. Gluconeogenesi dalle proteine.
-      rawC = 0;
-      rawP = (recoveryKcal * 0.55) / 4;
-      rawF = (recoveryKcal * 0.45) / 9;
-
-  } else if (protocol === 'LowCarb' || protocol === 'Paleo') {
-      // FLESSIBILE: Ricarica glicogeno moderata
+  } else if (protocol === 'LowCarb' || protocol === 'Low Carb' || protocol === 'Bilanciata' || protocol === 'Personalizza') {
+      // FLESSIBILE: Ricarica glicogeno moderata (Personalizza usa stesso schema, target effettivi dal profilo)
       rawC = (recoveryKcal * 0.40) / 4;
       rawP = (recoveryKcal * 0.30) / 4;
       rawF = (recoveryKcal * 0.30) / 9;

@@ -1,53 +1,33 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
+ * Theme unico (design system minimal/pro).
+ * Tutta l'app usa palette scura e tipografia coerente.
  */
+import { DS } from './designSystem';
 
-import { Platform } from 'react-native';
+export const BG = DS.bg;
+export const TEXT_PRIMARY = DS.text;
+export const TEXT_SECONDARY = DS.textSecondary;
+export const CARD_BG = DS.surface;
+export const ACCENT_BTN = DS.accent;
+export const ACCENT_MIC = DS.accent;
+export const RING_TRACK = DS.border;
+export const RED_ALERT = DS.alert;
+export const RING_CARB = DS.carb;
+export const RING_PROTEIN = DS.protein;
+export const RING_FAT = DS.fat;
+export const SUCCESS = DS.success;
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
-
-export const Colors = {
-  light: {
-    text: '#11181C',
-    background: '#fff',
-    tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
-  },
-  dark: {
-    text: '#ECEDEE',
-    background: '#151718',
-    tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
-  },
+export default {
+  BG,
+  TEXT_PRIMARY,
+  TEXT_SECONDARY,
+  CARD_BG,
+  ACCENT_BTN,
+  ACCENT_MIC,
+  RING_TRACK,
+  RED_ALERT,
+  RING_CARB,
+  RING_PROTEIN,
+  RING_FAT,
+  SUCCESS,
 };
-
-export const Fonts = Platform.select({
-  ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
-    sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
-    serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
-    rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
-    mono: 'ui-monospace',
-  },
-  default: {
-    sans: 'normal',
-    serif: 'serif',
-    rounded: 'normal',
-    mono: 'monospace',
-  },
-  web: {
-    sans: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-    serif: "Georgia, 'Times New Roman', serif",
-    rounded: "'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif",
-    mono: "SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-  },
-});

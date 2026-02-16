@@ -4,11 +4,18 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "start:android": "node scripts/clear-expo-devices.js && expo start --android",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
+    "android:dev": "node scripts/run-android-dev.js",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "build:apk": "eas build --platform android --profile preview --non-interactive",
+    "build:apk:local": "cd android && .\\gradlew.bat assembleRelease",
+    "build:apk:debug": "cd android && .\\gradlew.bat assembleDebug",
+    "install:apk": "cd android && .\\gradlew.bat installRelease",
+    "install:apk:debug": "cd android && .\\gradlew.bat installDebug"
   },
   "dependencies": {
     "@expo/vector-icons": "~14.0.4",
@@ -24,12 +31,16 @@
     "expo": "~52.0.33",
     "expo-build-properties": "~0.13.3",
     "expo-constants": "~17.0.3",
+    "expo-dev-client": "~5.0.20",
     "expo-font": "~13.0.3",
     "expo-haptics": "~14.0.1",
     "expo-image": "~2.0.6",
     "expo-linear-gradient": "~14.0.2",
     "expo-linking": "~7.0.5",
+    "expo-location": "~18.0.10",
     "expo-router": "~4.0.17",
+    "expo-screen-orientation": "~8.0.4",
+    "expo-speech-recognition": "^3.1.0",
     "expo-splash-screen": "~0.29.22",
     "expo-status-bar": "~2.0.1",
     "expo-symbols": "~0.2.1",
@@ -51,7 +62,7 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~18.3.12",
-    "eslint": "^9.25.0",
+    "eslint": "^8.57.0",
     "eslint-config-expo": "~8.0.1",
     "supabase": "^2.75.0",
     "typescript": "~5.3.3"
