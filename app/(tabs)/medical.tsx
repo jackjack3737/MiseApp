@@ -19,11 +19,17 @@ const CART_KEY = '@user_shopping_list';
 const LOGS_KEY = '@user_daily_logs';
 const SYMPTOM_KEY = '@user_daily_symptom_factor';
 
+function getTodayLocal(): string {
+  const d = new Date();
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export default function MedicalScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ symptom?: string }>();
   const [search, setSearch] = useState('');
-  const [protocols, setProtocols] = useState([]);
+  const [protocols, setProtocols] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedProtocol, setSelectedProtocol] = useState<any>(null);
   const [productDetails, setProductDetails] = useState<any>({});
@@ -31,6 +37,8 @@ export default function MedicalScreen() {
   
   // STATO ATTUALE DEL SISTEMA
   const [activeSymptom, setActiveSymptom] = useState<any>(null);
+  // Pasti recenti con ingredienti (per correlazione sintomo → possibili cause)
+  const [recentMealsWithIngredients, setRecentMealsWithIngredients] = useState<{ date: string; food_name: string; ingredients?: string[] }[]>([]);
 
   // Ricarica lo stato ogni volta che entri nella pagina
   useFocusEffect(useCallback(() => {
@@ -48,9 +56,19 @@ export default function MedicalScreen() {
   const checkSystemStatus = async () => {
       try {
           const data = await AsyncStorage.getItem(SYMPTOM_KEY);
-          if (data) setActiveSymptom(JSON.parse(data));
-          else setActiveSymptom(null);
-      } catch(e) {}
+          const today = getTodayLocal();
+          if (data) {
+            const parsed = JSON.parse(data);
+            if (parsed.date === today && parsed.factor != null) {
+              setActiveSymptom(parsed);
+            } else {
+              await AsyncStorage.removeItem(SYMPTOM_KEY);
+              setActiveSymptom(null);
+            }
+          } else setActiveSymptom(null);
+      } catch(e) {
+        setActiveSymptom(null);
+      }
   };
 
   // RESET DEL PROTOCOLLO (Rimuove il sintomo)
@@ -58,7 +76,7 @@ export default function MedicalScreen() {
       try {
           await AsyncStorage.removeItem(SYMPTOM_KEY);
           setActiveSymptom(null);
-          Alert.alert("SISTEMA RIPRISTINATO", "Parametri metabolici normalizzati. Malus rimosso.");
+          Alert.alert("Fatto!", "Parametri ripristinati. Il malus è stato rimosso.");
       } catch(e) {}
   };
 
@@ -74,8 +92,41 @@ export default function MedicalScreen() {
     if (selectedProtocol?.recommended_product_id?.length > 0) {
       fetchProductsInfo(selectedProtocol.recommended_product_id);
     }
-    setAddedItems([]); 
+    setAddedItems([]);
   }, [selectedProtocol]);
+
+  // Carica pasti degli ultimi 3 giorni (con ingredienti) per suggerire possibili cause del sintomo
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    (async () => {
+      if (!selectedProtocol) return;
+      try {
+        const raw = await AsyncStorage.getItem(LOGS_KEY);
+        const allLogs: any[] = raw ? JSON.parse(raw) : [];
+        const today = new Date().toISOString().split('T')[0];
+        const dates = [today];
+        for (let i = 1; i <= 2; i++) {
+          const d = new Date(Date.now() - i * 86400000);
+          dates.push(d.toISOString().split('T')[0]);
+        }
+        const recent = allLogs.filter((l: any) => {
+          const date = l.date || today;
+          if (!dates.includes(date)) return false;
+          if (l.meal_type === 'SINTOMO' || (l.food_name && String(l.food_name).startsWith('SINTOMO:'))) return false;
+          return true;
+        });
+        const withIngredients = recent.map((l: any) => ({
+          date: l.date || today,
+          food_name: l.food_name || 'Pasto',
+          ingredients: Array.isArray(l.ingredients) ? l.ingredients : undefined,
+        }));
+        if (!cancelled) setRecentMealsWithIngredients(withIngredients.slice(0, 20));
+      } catch {
+        if (!cancelled) setRecentMealsWithIngredients([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedProtocol]));
 
   const clearSearch = () => {
     setSearch('');
@@ -115,7 +166,7 @@ export default function MedicalScreen() {
   const handleLogSymptom = async () => {
     if (!selectedProtocol) return;
     try {
-        const today = new Date().toISOString().split('T')[0];
+        const today = getTodayLocal();
         
         // 2. IMPOSIZIONE MALUS (calcolato prima per includerlo nel log)
         let severityFactor = 0.8;
@@ -155,14 +206,19 @@ export default function MedicalScreen() {
         };
 
         await AsyncStorage.setItem(SYMPTOM_KEY, JSON.stringify(symptomData));
+        try {
+          const { logSintomo } = require('../../database/db');
+          const intensity = severityFactor <= 0.5 ? 8 : severityFactor <= 0.7 ? 6 : 5;
+          await logSintomo(selectedProtocol.symptom_name, intensity);
+        } catch (_) { /* SQLite non disponibile (es. Expo Go) */ }
         await checkSystemStatus(); // Aggiorna la UI locale subito
 
         Alert.alert("BIO-FEEDBACK REGISTRATO", `Protocollo aggiornato:\n${warningMsg}`, [
-          { text: "OK", onPress: () => router.replace("/(tabs)/tracker") },
+          { text: "OK", onPress: () => router.replace("/tracker") },
         ]);
 
     } catch (e) {
-        Alert.alert("ERRORE", "FALLIMENTO SCRITTURA DATI");
+        Alert.alert("Ops!", "C'è stato un problema nel salvataggio. Riprova.");
     }
   };
 
@@ -187,7 +243,7 @@ export default function MedicalScreen() {
         await AsyncStorage.setItem(CART_KEY, JSON.stringify(cartItems));
       }
       setAddedItems(prev => [...prev, productId]); 
-    } catch (e) { Alert.alert("ERRORE", "SYNC_CART_FAILED"); }
+    } catch (e) { Alert.alert("Ops!", "C'è stato un problema nel salvataggio. Riprova."); }
   };
 
   const renderProtocolItem = ({ item }: any) => (
@@ -287,6 +343,28 @@ export default function MedicalScreen() {
             <AlertTriangle size={18} color={CARD_BG} />
             <Text style={styles.logSymptomText}>Registra e adatta dieta</Text>
           </TouchableOpacity>
+
+          {recentMealsWithIngredients.length > 0 && (
+            <View style={[styles.techCard, { borderLeftColor: HEADER_ACCENT, borderLeftWidth: 4 }]}>
+              <View style={styles.cardHeaderRow}>
+                <Activity size={16} color={HEADER_ACCENT} />
+                <Text style={[styles.cardLabel, { color: HEADER_ACCENT }]}>Pasti recenti (possibili cause)</Text>
+              </View>
+              <Text style={styles.recentMealsIntro}>
+                Nei giorni scorsi hai mangiato questi piatti. Se il sintomo può dipendere da un alimento, controlla gli ingredienti: potrebbe essere uno di questi.
+              </Text>
+              {recentMealsWithIngredients.map((meal, idx) => (
+                <View key={`${meal.date}-${meal.food_name}-${idx}`} style={styles.recentMealRow}>
+                  <Text style={styles.recentMealName}>{meal.food_name}</Text>
+                  {meal.ingredients && meal.ingredients.length > 0 ? (
+                    <Text style={styles.recentMealIngredients}>Ingredienti: {meal.ingredients.join(', ')}</Text>
+                  ) : (
+                    <Text style={styles.recentMealNoIngredients}>Nessun dettaglio ingredienti per questo pasto.</Text>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
 
           <View style={styles.techCard}>
             <Text style={styles.cardLabel}>Meccanismo</Text>
@@ -429,4 +507,10 @@ const styles = StyleSheet.create({
   
   introBox: { marginTop: 80, alignItems: 'center', paddingHorizontal: 40 },
   introText: { color: '#9CA3AF', fontSize: 14, textAlign: 'center', fontWeight: '500' },
+
+  recentMealsIntro: { color: DARK_TEXT, fontSize: 13, lineHeight: 20, marginBottom: 14 },
+  recentMealRow: { marginBottom: 14, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: DARK_BORDER },
+  recentMealName: { color: DARK_TEXT, fontSize: 15, fontWeight: '600', marginBottom: 4 },
+  recentMealIngredients: { color: TEXT_SECONDARY, fontSize: 13, lineHeight: 18 },
+  recentMealNoIngredients: { color: '#6B7280', fontSize: 12, fontStyle: 'italic' },
 });

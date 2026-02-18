@@ -14,6 +14,7 @@ import {
     View,
 } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
+import { analyzeWeightTrend } from './MetabolicReactor';
 import { DEFAULT_BIO_DATA, getStressAvg, isNadirAfter3AM, type BioStatusData } from '../constants/bioStatusDefault';
 import { useBio } from '../context/BioContext';
 import useHealthConnect from '../hooks/useHealthConnect';
@@ -21,6 +22,19 @@ import { estimateKetones } from '../utils/ketones';
 
 const LOGS_KEY = '@user_daily_logs';
 const PROFILE_KEY = '@user_profile';
+const SYMPTOM_LAST_USED_KEY = '@symptom_last_used';
+
+function getTodayLocal(): string {
+  const d = new Date();
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function getYesterdayLocal(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 // ─── Material Light (M3) — sfondo bianco, stile Google ─────────────────────────
 const M3 = {
@@ -52,25 +66,25 @@ function getReadinessColor(value: number): string {
   return M3.alert;
 }
 
-/** Tutte le righe della card Dati di oggi */
+/** Tutte le righe della card Dati di oggi (etichette friendly) */
 function getBioRows(d: BioStatusData, m: { readiness: number; cnsBattery: number; glycogen: number; hydration: number }) {
   const stressAvg = getStressAvg(d);
   const carbOk = d.deepSleepMinutes >= 60 && d.rhrDeviation <= 2;
   return [
-    { id: 'readiness', label: 'Pronto oggi', value: `${m.readiness}%`, barValue: m.readiness, barColor: getReadinessColor(m.readiness) },
-    { id: 'affaticamento', label: 'Affaticamento', value: `${d.cnsFatiguePercent}%`, barValue: d.cnsFatiguePercent, barColor: d.cnsFatiguePercent > 60 ? M3.alert : d.cnsFatiguePercent > 40 ? M3.warning : M3.accent },
-    { id: 'difese', label: 'Difese', value: d.immuneShieldOk ? 'Stabile' : 'A rischio', barValue: 100, barColor: d.immuneShieldOk ? M3.success : M3.alert },
-    { id: 'energia_grassi', label: 'Energia grassi', value: `${d.fatBurnPercent}%`, barValue: d.fatBurnPercent, barColor: M3.accent },
-    { id: 'glycogen', label: 'Riserve energia', value: `${m.glycogen}%`, barValue: m.glycogen, barColor: M3.accent },
-    { id: 'efficienza_metabolica', label: 'Efficienza metabolica', value: `${d.mitochondrialScore}/10`, barValue: (d.mitochondrialScore / 10) * 100, barColor: M3.accent },
-    { id: 'reagisci_carboidrati', label: 'Reagisci ai carboidrati', value: carbOk ? 'Ottimale' : 'Ridotta', barValue: carbOk ? 100 : Math.min(100, (d.deepSleepMinutes / 60) * 50), barColor: carbOk ? M3.success : d.deepSleepMinutes >= 45 ? M3.warning : M3.alert },
-    { id: 'cnsBattery', label: 'Recupero nervoso', value: `${m.cnsBattery}%`, barValue: m.cnsBattery, barColor: m.cnsBattery >= 60 ? M3.success : m.cnsBattery >= 40 ? M3.warning : M3.alert },
-    { id: 'recupero_notte', label: 'Recupero nella notte', value: `Nadir ${d.hrNadirTime}`, barValue: isNadirAfter3AM(d.hrNadirTime) ? 25 : 100, barColor: isNadirAfter3AM(d.hrNadirTime) ? M3.alert : M3.success },
-    { id: 'hydration', label: 'Idratazione', value: `${m.hydration}%`, barValue: m.hydration, barColor: M3.accent },
-    { id: 'sodio_perso', label: 'Sodio perso', value: `${d.sodiumLossMg} mg`, barValue: Math.min(100, (d.sodiumLossMg / 2000) * 100), barColor: M3.accent },
-    ...(d.bonkMinutesLeft != null ? [{ id: 'rischio_calo', label: 'Rischio calo energia', value: `Tra ${d.bonkMinutesLeft} min`, barValue: Math.min(100, (d.bonkMinutesLeft / 120) * 100), barColor: d.bonkMinutesLeft >= 60 ? M3.warning : M3.alert }] : []),
-    ...(d.metabolicWindowMinutesLeft != null ? [{ id: 'tempo_recupero_pasto', label: 'Tempo recupero pasto', value: `${d.metabolicWindowMinutesLeft} min`, barValue: Math.min(100, (d.metabolicWindowMinutesLeft / 45) * 100), barColor: M3.accent }] : []),
-    { id: 'andamento_stress', label: 'Andamento stress', value: `${Math.round(stressAvg)}%`, barValue: stressAvg, barColor: stressAvg > 60 ? M3.alert : stressAvg > 40 ? M3.warning : M3.accent },
+    { id: 'readiness', label: 'Energia di oggi', value: `${m.readiness}%`, barValue: m.readiness, barColor: getReadinessColor(m.readiness) },
+    { id: 'affaticamento', label: 'Stanchezza nervosa', value: `${d.cnsFatiguePercent}%`, barValue: d.cnsFatiguePercent, barColor: d.cnsFatiguePercent > 60 ? M3.alert : d.cnsFatiguePercent > 40 ? M3.warning : M3.accent },
+    { id: 'difese', label: 'Difese immunitarie', value: d.immuneShieldOk ? 'Stabili' : 'A rischio', barValue: 100, barColor: d.immuneShieldOk ? M3.success : M3.alert },
+    { id: 'energia_grassi', label: 'Quota energia da grassi', value: `${d.fatBurnPercent}%`, barValue: d.fatBurnPercent, barColor: M3.accent },
+    { id: 'glycogen', label: 'Serbatoio zuccheri', value: `${m.glycogen}%`, barValue: m.glycogen, barColor: M3.accent },
+    { id: 'efficienza_metabolica', label: 'Efficienza mitocondri', value: `${d.mitochondrialScore}/10`, barValue: (d.mitochondrialScore / 10) * 100, barColor: M3.accent },
+    { id: 'reagisci_carboidrati', label: 'Risposta ai carboidrati', value: carbOk ? 'Ottimale' : 'Ridotta', barValue: carbOk ? 100 : Math.min(100, (d.deepSleepMinutes / 60) * 50), barColor: carbOk ? M3.success : d.deepSleepMinutes >= 45 ? M3.warning : M3.alert },
+    { id: 'cnsBattery', label: 'Batteria sistema nervoso', value: `${m.cnsBattery}%`, barValue: m.cnsBattery, barColor: m.cnsBattery >= 60 ? M3.success : m.cnsBattery >= 40 ? M3.warning : M3.alert },
+    { id: 'recupero_notte', label: 'Recupero notturno', value: `Nadir ${d.hrNadirTime}`, barValue: isNadirAfter3AM(d.hrNadirTime) ? 25 : 100, barColor: isNadirAfter3AM(d.hrNadirTime) ? M3.alert : M3.success },
+    { id: 'hydration', label: 'Idratazione generale', value: `${m.hydration}%`, barValue: m.hydration, barColor: M3.accent },
+    { id: 'sodio_perso', label: 'Sale perso oggi', value: `${d.sodiumLossMg} mg`, barValue: Math.min(100, (d.sodiumLossMg / 2000) * 100), barColor: M3.accent },
+    ...(d.bonkMinutesLeft != null ? [{ id: 'rischio_calo', label: 'Rischio calo di energia', value: `Tra ${d.bonkMinutesLeft} min`, barValue: Math.min(100, (d.bonkMinutesLeft / 120) * 100), barColor: d.bonkMinutesLeft >= 60 ? M3.warning : M3.alert }] : []),
+    ...(d.metabolicWindowMinutesLeft != null ? [{ id: 'tempo_recupero_pasto', label: 'Finestra post-allenamento', value: `${d.metabolicWindowMinutesLeft} min`, barValue: Math.min(100, (d.metabolicWindowMinutesLeft / 45) * 100), barColor: M3.accent }] : []),
+    { id: 'andamento_stress', label: 'Livello di stress', value: `${Math.round(stressAvg)}%`, barValue: stressAvg, barColor: stressAvg > 60 ? M3.alert : stressAvg > 40 ? M3.warning : M3.accent },
   ];
 }
 
@@ -141,7 +155,7 @@ const BIO_EXPLANATIONS: Record<string, { title: string; body: string }> = {
 
 /** Registra un sintomo e restituisce l'id del log creato. */
 async function logSymptomToHistory(symptomName: string, message?: string, severityFactor = 0.8): Promise<string> {
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodayLocal();
   const id = Date.now().toString();
   const newLog = {
     id,
@@ -178,6 +192,21 @@ const FEELING_TABS: { id: string; label: string; message: string; severity?: num
   { id: 'dolori', label: 'Dolori', message: 'Riposo consigliato.', severity: 0.8 },
 ];
 
+/** Ordina i sintomi: ultimo usato (data più vicina) prima. */
+function sortTabsByLastUsed(
+  tabs: typeof FEELING_TABS,
+  lastUsed: Record<string, string>
+): typeof FEELING_TABS {
+  return [...tabs].sort((a, b) => {
+    const dateA = lastUsed[a.id] || '';
+    const dateB = lastUsed[b.id] || '';
+    if (dateA && !dateB) return -1;
+    if (!dateA && dateB) return 1;
+    if (dateA && dateB) return dateB.localeCompare(dateA);
+    return 0;
+  });
+}
+
 /** Stesso calcolo totali del Tracker: da @user_daily_logs, campi carbs/proteins/fats. */
 function calculateTotalsFromLogs(todayList: any[]): { kcal: number; c: number; p: number; f: number } {
   return todayList.reduce(
@@ -196,36 +225,62 @@ export type HomeScreenProps = { refreshKey?: number };
 const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
   const router = useRouter();
   const { metrics, coachMessage, weather, healthPermissionMissing, actions } = useBio();
-  const { steps, sleepHours } = useHealthConnect();
+  const { steps, sleepHours, weight: healthWeight, lastWorkoutType } = useHealthConnect();
   const [syncing, setSyncing] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
   const [expandedMetricId, setExpandedMetricId] = useState<string | null>(null);
   const [todayTotals, setTodayTotals] = useState({ kcal: 0, c: 0, p: 0, f: 0 });
   const [todayLogs, setTodayLogs] = useState<any[]>([]);
   const [userBMR, setUserBMR] = useState(1500);
-  const [macroTargets, setMacroTargets] = useState({ c: 25, p: 150, f: 150 });
+  const [macroTargets, setMacroTargets] = useState({ c: 25, p: 100, f: 150 });
+  const [profileWeight, setProfileWeight] = useState<number | undefined>(undefined);
+  const [profileHeight, setProfileHeight] = useState<number | undefined>(undefined);
+  const [yesterdayCarbs, setYesterdayCarbs] = useState(0);
   const [selectedSymptomId, setSelectedSymptomId] = useState<string | null>(null);
   const [lastSymptomLogId, setLastSymptomLogId] = useState<string | null>(null);
+  const [symptomLastUsed, setSymptomLastUsed] = useState<Record<string, string>>({});
   const toastOpacity = useState(() => new Animated.Value(0))[0];
+
+  const sortedFeelingTabs = React.useMemo(
+    () => sortTabsByLastUsed(FEELING_TABS, symptomLastUsed),
+    [symptomLastUsed]
+  );
 
   const loadProfileAndLogs = useCallback(async () => {
     try {
       const profileRaw = await AsyncStorage.getItem(PROFILE_KEY);
-      if (profileRaw) {
-        const p = JSON.parse(profileRaw);
+      const p = profileRaw ? JSON.parse(profileRaw) : null;
+      if (p) {
+        const w = parseFloat(p.weight);
+        const h = parseFloat(p.height);
+        if (Number.isFinite(w)) setProfileWeight(w);
+        if (Number.isFinite(h)) setProfileHeight(h);
+        // Stessa identica logica del Tracker: stessi fallback così target e totali coincidono
         setMacroTargets({
-          c: parseInt(p.carbs ?? p.targetCarbs, 10) || 25,
-          p: parseInt(p.protein ?? p.targetProtein, 10) || 150,
+          c: parseInt(p.targetCarbs ?? p.carbs, 10) || 25,
+          p: parseInt(p.protein ?? p.targetProtein, 10) || 100,
           f: parseInt(p.fat ?? p.targetFat, 10) || 150,
         });
+      } else {
+        setMacroTargets({ c: 25, p: 100, f: 150 });
+      }
+      const lastUsedRaw = await AsyncStorage.getItem(SYMPTOM_LAST_USED_KEY);
+      if (lastUsedRaw) {
+        try {
+          setSymptomLastUsed(JSON.parse(lastUsedRaw));
+        } catch (_) {}
       }
       const logsRaw = await AsyncStorage.getItem(LOGS_KEY);
-      const today = new Date().toISOString().split('T')[0];
+      const today = getTodayLocal();
+      const yesterday = getYesterdayLocal();
       if (logsRaw) {
         const all = JSON.parse(logsRaw);
         const todayList = all.filter((l: any) => l.date === today);
         setTodayLogs(todayList);
         setTodayTotals(calculateTotalsFromLogs(todayList));
+        const yesterdayList = all.filter((l: any) => l.date === yesterday);
+        const yCarbs = yesterdayList.reduce((acc: number, item: any) => acc + (item.carbs || 0), 0);
+        setYesterdayCarbs(yCarbs);
         const symptomLog = todayList.find((l: any) => l.meal_type === 'SINTOMO' && l.food_name && l.food_name.startsWith('SINTOMO:'));
         if (symptomLog) {
           const namePart = (symptomLog.food_name || '').replace('SINTOMO:', '').trim().toLowerCase();
@@ -241,6 +296,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
       } else {
         setTodayLogs([]);
         setTodayTotals({ kcal: 0, c: 0, p: 0, f: 0 });
+        setYesterdayCarbs(0);
         setSelectedSymptomId(null);
         setLastSymptomLogId(null);
       }
@@ -248,7 +304,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
   }, []);
 
   useFocusEffect(useCallback(() => {
-    const t = setTimeout(() => loadProfileAndLogs(), 100);
+    const t = setTimeout(() => loadProfileAndLogs(), 400);
     return () => clearTimeout(t);
   }, [loadProfileAndLogs]));
 
@@ -291,6 +347,19 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
     return null;
   };
 
+  // Lab: Prevenzione infiammazione, Metabolic Detective (Rocca Index richiede distanza/durata/FC da workout)
+  const weight = profileWeight ?? healthWeight;
+  const height = profileHeight;
+  const bmi = weight != null && height != null && height > 0 ? weight / Math.pow(height / 100, 2) : null;
+  const activityType = lastWorkoutType === 'aerobic_intense' ? 'Running' : undefined;
+  const isHighRisk = (bmi != null && bmi > 27) && activityType === 'Running';
+  const stressLevel = metrics.readiness < 40 ? 'High' : metrics.readiness >= 70 ? 'Low' : 'Medium';
+  const weightDiff = healthWeight != null && profileWeight != null ? healthWeight - profileWeight : 0;
+  const detectiveMessage = analyzeWeightTrend(weightDiff, todayTotals.c || 0, stressLevel, {
+    deficit: bilancioKcal < 0,
+    prevCarbs: yesterdayCarbs,
+  });
+
   const showToast = useCallback(() => {
     setToastVisible(true);
     Animated.sequence([
@@ -309,7 +378,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
       const raw = await AsyncStorage.getItem(LOGS_KEY);
       if (raw) {
         const all = JSON.parse(raw);
-        const today = new Date().toISOString().split('T')[0];
+        const today = getTodayLocal();
         setTodayLogs(all.filter((l: any) => l.date === today));
       }
       return;
@@ -332,26 +401,27 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
 
   return (
     <>
+      {/* Intestazione come altre pagine: titolo + riga separatrice */}
+      <View style={styles.pageHeader}>
+        <View style={styles.headerTitleBlock}>
+          <Text style={styles.headerTitle} numberOfLines={1}>Oggi</Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>Ketolab · Sinelica Digital</Text>
+        </View>
+        <View style={styles.headerRight}>
+          <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} style={styles.iconBtn} hitSlop={12}>
+            <Ionicons name="person-circle-outline" size={28} color={M3.text} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onSync} disabled={syncing} style={styles.iconBtn} hitSlop={12}>
+            {syncing ? <ActivityIndicator size="small" color={M3.text} /> : <Ionicons name="sync" size={24} color={M3.text} />}
+          </TouchableOpacity>
+        </View>
+      </View>
+
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Riga: Ketolab + Sinelica a sinistra, Profilo e Aggiorna a destra */}
-        <View style={styles.titleRow}>
-          <View style={styles.appTitleBlock}>
-            <Text style={styles.appTitle}>Ketolab</Text>
-            <Text style={styles.appSubtitle}>Sinelica Digital</Text>
-          </View>
-          <View style={styles.topIcons}>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} style={styles.iconBtn} hitSlop={12}>
-              <Ionicons name="person-circle-outline" size={28} color={M3.text} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={onSync} disabled={syncing} style={styles.iconBtn} hitSlop={12}>
-              {syncing ? <ActivityIndicator size="small" color={M3.text} /> : <Ionicons name="sync" size={24} color={M3.text} />}
-            </TouchableOpacity>
-          </View>
-        </View>
         <View style={styles.dateRow}>
           <Text style={styles.datePillText}>{dateLabel}</Text>
         </View>
@@ -400,31 +470,16 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
         </View>
 
         {/* Pill: Aggiungi il pasto di oggi */}
-        <TouchableOpacity style={styles.pillBtn} onPress={() => router.push('/(tabs)/tracker')} activeOpacity={0.8}>
+        <TouchableOpacity style={styles.pillBtn} onPress={() => router.push('/tracker')} activeOpacity={0.8}>
           <Ionicons name="restaurant-outline" size={20} color={M3.accent} />
           <Text style={styles.pillBtnText}>Aggiungi il pasto di oggi</Text>
         </TouchableOpacity>
 
-        {/* Come ti senti? — griglia pillole */}
-        <Text style={styles.sectionLabel}>Come ti senti?</Text>
-        <View style={styles.symptomGrid}>
-          {FEELING_TABS.map((tab) => {
-            const isSelected = selectedSymptomId === tab.id;
-            return (
-              <TouchableOpacity
-                key={tab.id}
-                style={[styles.symptomTile, isSelected && styles.symptomTileSelected]}
-                onPress={() => router.push({ pathname: '/(tabs)/medical', params: { symptom: tab.label } })}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.symptomTileLabel, isSelected && styles.symptomTileLabelSelected]}>{tab.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-          <TouchableOpacity style={styles.symptomTile} onPress={() => router.push('/(tabs)/medical')} activeOpacity={0.7}>
-            <Text style={styles.symptomTileLabel}>Altro…</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Pulsante unico → Medical (salute e sintomi) */}
+        <TouchableOpacity style={styles.pillBtn} onPress={() => router.push('/(tabs)/medical')} activeOpacity={0.8}>
+          <Ionicons name="medkit-outline" size={20} color={M3.accent} />
+          <Text style={styles.pillBtnText}>Salute e sintomi</Text>
+        </TouchableOpacity>
 
         {/* Dati di oggi — barre compatte + tendina spiegazione */}
         <View style={styles.metricsCard}>
@@ -450,6 +505,28 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
               </View>
             );
           })}
+          {isHighRisk && (
+            <View style={styles.metricRowWrap}>
+              <View style={styles.labWarningBox}>
+                <Text style={styles.labWarningLabel}>Prevenzione infiammazione</Text>
+                <Text style={styles.labWarningText}>Carico articolare eccessivo (Peso ×3). Cortisolo in aumento. Passa a Camminata in Salita.</Text>
+              </View>
+            </View>
+          )}
+          {detectiveMessage != null && (
+            <View style={styles.metricRowWrap}>
+              <TouchableOpacity style={styles.metricRow} onPress={() => setExpandedMetricId((prev) => (prev === 'detective' ? null : 'detective'))} activeOpacity={0.8}>
+                <Text style={styles.metricRowLabel}>Metabolic Detective</Text>
+                <Text style={[styles.metricRowValue, { color: M3.accent }]} numberOfLines={1}>{detectiveMessage}</Text>
+              </TouchableOpacity>
+              {expandedMetricId === 'detective' && (
+                <View style={styles.metricTendina}>
+                  <Text style={styles.metricTendinaTitle}>Interpretazione trend peso / carbo / stress</Text>
+                  <Text style={styles.metricTendinaBody}>{detectiveMessage}</Text>
+                </View>
+              )}
+            </View>
+          )}
         </View>
 
         {/* Coach */}
@@ -475,14 +552,24 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: M3.bg },
   content: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 120 },
 
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  appTitleBlock: {},
+  pageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    paddingTop: 10,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.08)',
+    backgroundColor: M3.bg,
+  },
+  headerTitleBlock: { flex: 1, flexDirection: 'column', justifyContent: 'center', minWidth: 0 },
+  headerTitle: { fontSize: 22, fontWeight: '700', color: M3.text },
+  headerSubtitle: { fontSize: 12, color: M3.textMuted, fontWeight: '500', marginTop: 2 },
+  headerRight: { flexDirection: 'row', gap: 8 },
   dateRow: { marginBottom: 12 },
   datePillText: { fontSize: 13, color: M3.textBody, fontWeight: '500' },
-  topIcons: { flexDirection: 'row', gap: 8 },
   iconBtn: { padding: 4, minWidth: 40, alignItems: 'center', justifyContent: 'center' },
-  appTitle: { fontSize: 28, fontWeight: '800', color: M3.text, letterSpacing: -0.5 },
-  appSubtitle: { fontSize: 12, color: M3.textMuted, fontWeight: '600', marginTop: 2, letterSpacing: 0.5 },
 
   healthBanner: {
     flexDirection: 'row',
@@ -599,6 +686,9 @@ const styles = StyleSheet.create({
   },
   metricTendinaTitle: { fontSize: 15, fontWeight: '600', color: M3.text, marginBottom: 6 },
   metricTendinaBody: { fontSize: 14, color: M3.textBody, lineHeight: 22 },
+  labWarningBox: { marginTop: 8, padding: 12, backgroundColor: 'rgba(249,171,0,0.12)', borderRadius: 12, borderLeftWidth: 4, borderLeftColor: M3.warning },
+  labWarningLabel: { fontSize: 12, fontWeight: '600', color: M3.textMuted, marginBottom: 4 },
+  labWarningText: { fontSize: 14, color: M3.text, lineHeight: 20 },
 
   coachCard: {
     backgroundColor: M3.surface,

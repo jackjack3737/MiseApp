@@ -2,10 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
-import { Beef, Clock, Cookie, CookingPot, Cpu, Dumbbell, Fish, Flame, Footprints, Leaf, Mic, Minus, Moon, Plus, Trash2, X, Zap } from 'lucide-react-native';
+import { Beef, Camera, Clock, Cookie, CookingPot, Cpu, Dumbbell, Fish, Flame, Footprints, Leaf, Mic, Minus, Moon, Plus, Trash2, X, Zap } from 'lucide-react-native';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, Linking, Modal, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Keyboard, Linking, Modal, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
 import { getFoodFromAI } from '../../utils/gemini-cache';
 import { OpenFoodFactsProduct, searchOpenFoodFacts } from '../../utils/openfoodfacts';
 
@@ -40,6 +41,17 @@ const HEADER_TEXT = DS.text;
 const getCurrentTimeString = () => {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+/** Data locale YYYY-MM-DD (non UTC), così dopo mezzanotte si vedono i pasti di oggi. */
+const getTodayLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const getYesterdayLocal = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
 const IconMap: any = {
@@ -217,12 +229,15 @@ export default function TrackerScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [symptomFactor, setSymptomFactor] = useState({ factor: 1.0, name: '' });
   const [yesterdayCarbs, setYesterdayCarbs] = useState(0);
+  const [profileWeight, setProfileWeight] = useState<number | undefined>(undefined);
+  const [profileHeight, setProfileHeight] = useState<number | undefined>(undefined);
   const [modalVisible, setModalVisible] = useState(false);
   const [tempFood, setTempFood] = useState<any>(null);
   const [currentWeight, setCurrentWeight] = useState(100);
   const [suggestions, setSuggestions] = useState<OpenFoodFactsProduct[]>([]);
   const [quickAddItems, setQuickAddItems] = useState<FoodItem[]>([]);
   const [quickAddAnalyzing, setQuickAddAnalyzing] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [yesterdayLastMealTime, setYesterdayLastMealTime] = useState<string | null>(null);
   const [timeEditVisible, setTimeEditVisible] = useState(false);
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
@@ -248,6 +263,8 @@ export default function TrackerScreen() {
             // BMR Harris-Benedict rivisitata (come in Profile) per Real-Time TDEE
             const w = parseFloat(p.weight) || 70;
             const h = parseFloat(p.height) || 170;
+            setProfileWeight(w);
+            setProfileHeight(h);
             const age = parseInt(p.age) || 30;
             const gender = p.gender === 'male' || p.gender === 'female' ? p.gender : 'male';
             const bmr = (10 * w) + (6.25 * h) - (5 * age) + (gender === 'male' ? 5 : -161);
@@ -255,16 +272,31 @@ export default function TrackerScreen() {
         } else {
             setTargets({ kcal: 2000, c: 25, p: 100, f: 150, protocol: 'Keto' });
             setUserBMR(1500);
+            setProfileWeight(undefined);
+            setProfileHeight(undefined);
         }
         
-        const symptomData = await AsyncStorage.getItem('@user_daily_symptom_factor');
-        setSymptomFactor(symptomData ? JSON.parse(symptomData) : { factor: 1.0, name: '' });
+        const symptomRaw = await AsyncStorage.getItem('@user_daily_symptom_factor');
+        const today = getTodayLocal();
+        const yesterday = getYesterdayLocal();
+        let symptomFactorValue = { factor: 1.0, name: '' };
+        if (symptomRaw) {
+          try {
+            const parsed = JSON.parse(symptomRaw);
+            if (parsed.date === today && parsed.factor != null) {
+              symptomFactorValue = { factor: parsed.factor, name: parsed.name || '' };
+            } else {
+              await AsyncStorage.removeItem('@user_daily_symptom_factor');
+            }
+          } catch (_) {
+            await AsyncStorage.removeItem('@user_daily_symptom_factor');
+          }
+        }
+        setSymptomFactor(symptomFactorValue);
 
         const savedLogs = await AsyncStorage.getItem('@user_daily_logs');
         if (savedLogs) {
             const allLogs = JSON.parse(savedLogs);
-            const today = new Date().toISOString().split('T')[0];
-            const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 
             const todayLogs = allLogs.filter((log: any) => log.date === today);
             setLogs(todayLogs.sort((a: any, b: any) => Number(b.id) - Number(a.id)));
@@ -402,6 +434,58 @@ export default function TrackerScreen() {
     }
   }
 
+  const pickImage = async (source: 'camera' | 'library') => {
+    if (source === 'camera') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permesso fotocamera',
+          'Per scattare una foto del pasto è necessario consentire l\'accesso alla fotocamera.',
+          [{ text: 'OK' }, { text: 'Impostazioni', onPress: () => Linking.openSettings() }]
+        );
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.7,
+        base64: true,
+      });
+      if (!result.canceled && result.assets[0]?.base64) {
+        setSelectedImage(result.assets[0].base64);
+      }
+    } else {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permesso galleria',
+          'Per analizzare una foto del pasto è necessario consentire l\'accesso alla galleria.',
+          [{ text: 'OK' }, { text: 'Impostazioni', onPress: () => Linking.openSettings() }]
+        );
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.7,
+        base64: true,
+      });
+      if (!result.canceled && result.assets[0]?.base64) {
+        setSelectedImage(result.assets[0].base64);
+      }
+    }
+  };
+
+  const showImagePickerOptions = () => {
+    Alert.alert('Foto del pasto', 'Scegli come aggiungere l\'immagine', [
+      { text: 'Annulla', style: 'cancel' },
+      { text: 'Fotocamera', onPress: () => pickImage('camera') },
+      { text: 'Galleria', onPress: () => pickImage('library') },
+    ]);
+  };
+
   async function runQuickAdd() {
     const phrase = inputText.trim();
     if (!phrase) return;
@@ -422,52 +506,71 @@ export default function TrackerScreen() {
 
   async function searchFood() {
     const phrase = inputText.trim();
-    if (!phrase) return;
-    setLoading(true); Keyboard.dismiss();
+    const hasImage = Boolean(selectedImage);
+    if (!phrase && !hasImage) return;
+    setLoading(true);
+    Keyboard.dismiss();
+    const queryForAI = phrase || 'Analizza questa foto di un pasto: descrivi il piatto e stima peso in grammi e macro (kcal, proteine, carboidrati, grassi) per la porzione visibile.';
     try {
-        const response = await getFoodFromAI(phrase);
-        let data = (typeof response === 'string') 
-            ? { food_name: phrase, kcal: 0, carbs: 0, proteins: 0, fats: 0, weight_g: 100 }
+        const response = await getFoodFromAI(queryForAI, selectedImage);
+        let data = (typeof response === 'string')
+            ? { food_name: queryForAI, kcal: 0, carbs: 0, proteins: 0, fats: 0, weight_g: 100 }
             : response;
 
-        if (data.isText) {
-            Alert.alert("SISTEMA_IA", data.ai_advice);
+        if (data.isText && data.ai_advice) {
+            Alert.alert("Attenzione", data.ai_advice);
             setLoading(false);
+            setSelectedImage(null);
             return;
         }
 
-        const cleanName = data.food_name.replace(/^(Colazione|Pranzo|Cena|Snack|Ecco|Dati|Risultato)[:\s- \t]*/i, '').trim();
+        const cleanName = (data.food_name || queryForAI).replace(/^(Colazione|Pranzo|Cena|Snack|Ecco|Dati|Risultato)[:\s- \t]*/i, '').trim();
 
         setCurrentWeight(data.weight_g || 100);
-        setTempFood({ 
-            name: cleanName, 
-            kcal: safeParse(data.kcal), c: safeParse(data.carbs || data.carb), 
-            p: safeParse(data.proteins || data.protein), f: safeParse(data.fats || data.fat), 
-            weight_g: safeParse(data.weight_g || 100), category_icon: 'default'
+        const ingredients = Array.isArray(data.ingredients) ? data.ingredients.filter((x: unknown) => typeof x === 'string') : [];
+        setTempFood({
+            name: cleanName,
+            kcal: safeParse(data.kcal), c: safeParse(data.carbs || data.carb),
+            p: safeParse(data.proteins || data.protein), f: safeParse(data.fats || data.fat),
+            weight_g: safeParse(data.weight_g || 100), category_icon: 'default',
+            ingredients: ingredients.length ? ingredients : undefined,
         });
         setModalVisible(true);
-    } catch (e) { 
+    } catch (e) {
         await clearLocalCache();
-        Alert.alert("SISTEMA", "Rilevata anomalia nel flusso AI. Riprova."); 
-    } 
-    finally { setLoading(false); }
+        const isPhotoOnly = hasImage && !phrase;
+        Alert.alert(
+          'Analisi non riuscita',
+          isPhotoOnly
+            ? "Non sono riuscito a analizzare la foto. Prova con una foto più nitida del piatto, con buona luce, oppure scrivi una breve descrizione (es. \"pasta al pomodoro\") insieme alla foto."
+            : "L'intelligenza artificiale non ha compreso la richiesta. Prova a descrivere il pasto in modo più semplice o aggiungi una foto del piatto."
+        );
+    } finally {
+        setLoading(false);
+        setSelectedImage(null);
+    }
   }
 
   async function confirmAndSave() {
     if(!tempFood) return;
     const ratio = currentWeight / (tempFood.weight_g || 100);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayLocal();
     
-    const newEntry = { 
+    const newEntry: Record<string, unknown> = { 
         id: Date.now().toString(), meal_type: selectedMeal, food_name: tempFood.name, 
         kcal: Math.round(tempFood.kcal * ratio), carbs: Math.round(tempFood.c * ratio), 
         proteins: Math.round(tempFood.p * ratio), fats: Math.round(tempFood.f * ratio), 
         date: today, label: `${currentWeight}g`, icon_type: 'default', time: getCurrentTimeString()
     };
+    if (tempFood.ingredients?.length) newEntry.ingredients = tempFood.ingredients;
 
     const savedLogsJson = await AsyncStorage.getItem('@user_daily_logs');
     const currentLogs = savedLogsJson ? JSON.parse(savedLogsJson) : [];
     await AsyncStorage.setItem('@user_daily_logs', JSON.stringify([newEntry, ...currentLogs]));
+    try {
+      const { logEvent } = require('../../database/db');
+      await logEvent('FOOD', tempFood.name, { ingredients: tempFood.ingredients || [] });
+    } catch (_) { /* SQLite non disponibile (es. Expo Go) */ }
     setModalVisible(false); setInputText(''); loadData();
   }
 
@@ -612,6 +715,13 @@ export default function TrackerScreen() {
               lastWorkoutType={lastWorkoutType ?? undefined}
               symptomFactor={symptomMult}
               symptomName={symptomFactor.name}
+              weight={profileWeight ?? healthWeight ?? undefined}
+              height={profileHeight}
+              activityType={lastWorkoutType === 'aerobic_intense' ? 'Running' : undefined}
+              weightDiff={healthWeight != null && profileWeight != null ? healthWeight - profileWeight : 0}
+              stressLevel="Medium"
+              inCaloricDeficit={(Math.round((todayTotals.p * 4) + (todayTotals.c * 4) + (todayTotals.f * 9)) - (bmrBurnedSoFar + neatKcal + sportKcal)) < 0}
+              prevDayCarbs={yesterdayCarbs}
             />
           </View>
 
@@ -637,6 +747,9 @@ export default function TrackerScreen() {
                           <Trash2 size={18} color={TEXT_SECONDARY} />
                         </TouchableOpacity>
                       </View>
+                      {item.ingredients && Array.isArray(item.ingredients) && item.ingredients.length > 0 ? (
+                        <Text style={styles.mealCardIngredients} numberOfLines={2}>Ingredienti: {item.ingredients.join(', ')}</Text>
+                      ) : null}
                       <Text style={styles.mealCardKcal}>{item.kcal} kcal</Text>
                       <View style={styles.mealCardDots}>
                         <View style={[styles.macroDot, { backgroundColor: RING_CARB }]} />
@@ -660,20 +773,44 @@ export default function TrackerScreen() {
 
         {/* Floating pill — sopra la tab bar */}
         <View style={styles.floatingBarWrap}>
+          {selectedImage ? (
+            <View style={styles.imagePreviewWrap}>
+              <Image
+                source={{ uri: `data:image/jpeg;base64,${selectedImage}` }}
+                style={styles.imagePreview}
+                resizeMode="cover"
+              />
+              <Text style={styles.imagePreviewHint}>Tocca + per analizzare il pasto</Text>
+              <TouchableOpacity
+                style={styles.imagePreviewClose}
+                onPress={() => setSelectedImage(null)}
+                hitSlop={8}
+              >
+                <X size={16} color={CARD_BG} strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
           <View style={[styles.floatingBar, isListening && styles.floatingBarListening]}>
             <TouchableOpacity style={styles.floatingMic} onPress={startListening} activeOpacity={0.85}>
               <Mic size={22} color={isListening ? RED_ALERT : ACCENT_MIC} strokeWidth={2} />
             </TouchableOpacity>
+            <TouchableOpacity style={styles.floatingCamera} onPress={showImagePickerOptions} activeOpacity={0.85}>
+              <Camera size={22} color={ACCENT_MIC} strokeWidth={2} />
+            </TouchableOpacity>
             <TextInput
               style={styles.floatingInput}
-              placeholder="Aggiungi pasto..."
+              placeholder="Aggiungi pasto o scatta foto..."
               placeholderTextColor={TEXT_SECONDARY}
               value={inputText}
               onChangeText={setInputText}
               onSubmitEditing={searchFood}
               returnKeyType="send"
             />
-            <TouchableOpacity style={styles.floatingPlus} onPress={searchFood} disabled={loading}>
+            <TouchableOpacity
+              style={styles.floatingPlus}
+              onPress={searchFood}
+              disabled={loading || (!inputText.trim() && !selectedImage)}
+            >
               {loading ? <ActivityIndicator color={CARD_BG} size="small" /> : <Plus size={22} color={CARD_BG} strokeWidth={2.5} />}
             </TouchableOpacity>
           </View>
@@ -691,7 +828,7 @@ export default function TrackerScreen() {
           initialItems={quickAddItems}
           onSave={async (entries) => {
             setQuickAddItems([]);
-            const today = new Date().toISOString().split('T')[0];
+            const today = getTodayLocal();
             const nowTime = getCurrentTimeString();
             const newEntries = entries.map((e, i) => ({
               id: `${Date.now()}-qam-${i}`,
@@ -882,6 +1019,7 @@ const styles = StyleSheet.create({
   mealCardInner: { padding: 16 },
   mealCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   mealCardName: { color: TEXT_PRIMARY, fontSize: 16, fontWeight: '600', flex: 1 },
+  mealCardIngredients: { color: TEXT_SECONDARY, fontSize: 11, marginTop: 2, marginBottom: 4 },
   mealCardDelete: { padding: 4 },
   mealCardKcal: { color: TEXT_SECONDARY, fontSize: 12, marginBottom: 8 },
   mealCardDots: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
@@ -907,8 +1045,13 @@ const styles = StyleSheet.create({
   },
   floatingBarListening: { borderColor: RED_ALERT },
   floatingMic: { width: 44, height: 44, borderRadius: 22, backgroundColor: DS.surfaceElevated, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  floatingCamera: { width: 44, height: 44, borderRadius: 22, backgroundColor: DS.surfaceElevated, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
   floatingInput: { flex: 1, color: TEXT_PRIMARY, paddingVertical: 12, fontSize: 16, fontWeight: '500' },
   floatingPlus: { width: 44, height: 44, borderRadius: 22, backgroundColor: ACCENT_BTN, justifyContent: 'center', alignItems: 'center' },
+  imagePreviewWrap: { position: 'relative', alignSelf: 'flex-start', marginBottom: 10 },
+  imagePreview: { width: 64, height: 64, borderRadius: 12, backgroundColor: RING_TRACK },
+  imagePreviewHint: { fontSize: 11, color: TEXT_SECONDARY, marginTop: 4, marginBottom: 2 },
+  imagePreviewClose: { position: 'absolute', top: 4, right: 4, width: 24, height: 24, borderRadius: 12, backgroundColor: RED_ALERT, justifyContent: 'center', alignItems: 'center' },
   quickAddChip: { alignSelf: 'flex-start', marginTop: 10, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 16, backgroundColor: DS.surfaceElevated },
   quickAddChipDisabled: { opacity: 0.5 },
   quickAddChipText: { color: ACCENT_BTN, fontSize: 13, fontWeight: '600' },

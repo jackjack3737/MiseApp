@@ -4,6 +4,8 @@
  */
 import { DS } from './designSystem';
 
+export { Colors } from './Colors';
+
 export const BG = DS.bg;
 export const TEXT_PRIMARY = DS.text;
 export const TEXT_SECONDARY = DS.textSecondary;

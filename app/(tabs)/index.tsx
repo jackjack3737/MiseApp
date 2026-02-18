@@ -35,12 +35,11 @@ export default function IndexScreen() {
           await AsyncStorage.setItem('@is_premium', 'false');
         }
 
-        // 3. Reindirizza IMMEDIATAMENTE al Tracker
-        // Nota: Se preferisci andare alla Home (Mixer), cambia in router.replace('/(tabs)');
-        router.replace('/(tabs)/tracker'); 
+        // 3. Reindirizza alla pagina Oggi (Home)
+        router.replace('/(tabs)/home'); 
 
       } catch (_) {
-        router.replace('/(tabs)/tracker');
+        router.replace('/(tabs)/home');
       }
     };
 

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "KetolabV2",
+    "name": "KetoLab",
     "slug": "mise-app",
     "version": "2.0.0",
     "orientation": "portrait",
@@ -21,9 +21,7 @@
       "package": "com.tuonome.ketolabv2",
       "adaptiveIcon": {
         "backgroundColor": "#000000",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/icon.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -50,16 +48,24 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "L'app usa le foto per analizzare i pasti e stimare i macro.",
+          "cameraPermission": "L'app usa la fotocamera per scattare foto dei pasti."
+        }
+      ],
       "expo-speech-recognition",
       "expo-router",
       "react-native-health-connect",
       "./plugins/withHealthConnectRules",
       "./plugins/withDisableMinification",
-      "./plugins/withHealthConnectManifest","./plugins/withHealthConnectMainActivity",
+      "./plugins/withHealthConnectManifest",
+      "./plugins/withHealthConnectMainActivity",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/splash.png",
+          "image": "./assets/images/splash.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#F7F9FC",

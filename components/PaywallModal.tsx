@@ -15,11 +15,8 @@ export default function PaywallModal({ visible, onClose, onUnlock }: PaywallProp
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   
-  const handleSubscribe = (plan: 'monthly' | 'yearly') => {
-    // Qui integreremo RevenueCat o Stripe in futuro
-    console.log(`Tentativo acquisto piano: ${plan}`);
-    Alert.alert("Coming Soon", "I pagamenti saranno attivi a breve. Usa un codice sblocco se ne hai uno!");
-  };
+  // Piani abbonamento nascosti per review Store (solo sblocco con codice)
+  // const handleSubscribe = (plan: 'monthly' | 'yearly') => { };
 
   // --- LOGICA DI SBLOCCO SUPABASE ---
   const verifyCode = async () => {
@@ -100,31 +97,17 @@ export default function PaywallModal({ visible, onClose, onUnlock }: PaywallProp
                   />
                 </View>
 
-                {/* PLANS */}
-                <TouchableOpacity 
-                  style={[styles.planCard, styles.planCardActive]} 
-                  onPress={() => handleSubscribe('yearly')}
-                >
-                  <View style={styles.bestValueTag}>
-                    <Text style={styles.bestValueText}>PIÙ SCELTO - RISPARMI 50%</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.planTitle}>Annuale</Text>
-                    <Text style={styles.planDesc}>Tutto incluso, per sempre aggiornato</Text>
-                  </View>
+                {/* Piani abbonamento nascosti per review Store - solo sblocco con codice
+                <TouchableOpacity style={[styles.planCard, styles.planCardActive]} onPress={() => {}}>
+                  <View style={styles.bestValueTag}><Text style={styles.bestValueText}>PIÙ SCELTO</Text></View>
+                  <View><Text style={styles.planTitle}>Annuale</Text><Text style={styles.planDesc}>Tutto incluso</Text></View>
                   <Text style={styles.planPrice}>€ 29,99 / anno</Text>
                 </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={styles.planCard} 
-                  onPress={() => handleSubscribe('monthly')}
-                >
-                  <View>
-                    <Text style={[styles.planTitle, {color: '#fff'}]}>Mensile</Text>
-                    <Text style={styles.planDesc}>Massima flessibilità</Text>
-                  </View>
+                <TouchableOpacity style={styles.planCard} onPress={() => {}}>
+                  <View><Text style={[styles.planTitle, {color: '#fff'}]}>Mensile</Text><Text style={styles.planDesc}>Flessibilità</Text></View>
                   <Text style={[styles.planPrice, {color: '#fff'}]}>€ 4,99 / mese</Text>
                 </TouchableOpacity>
+                */}
 
                 {/* --- SEZIONE CODICE SBLOCCO --- */}
                 <View style={styles.redeemSection}>
@@ -152,12 +135,14 @@ export default function PaywallModal({ visible, onClose, onUnlock }: PaywallProp
                 </View>
 
                 <Text style={styles.disclaimer}>
-                  Abbonati per supportare lo sviluppo indipendente. Puoi annullare quando vuoi dalle impostazioni del tuo store.
+                  Inserisci il codice ricevuto per sbloccare le funzionalità PRO.
                 </Text>
 
-                <TouchableOpacity style={styles.ctaBtn} onPress={() => handleSubscribe('yearly')}>
+                {/* CTA nascosto per review Store
+                <TouchableOpacity style={styles.ctaBtn} onPress={() => {}}>
                   <Text style={styles.ctaText}>ATTIVA ORA</Text>
                 </TouchableOpacity>
+                */}
               </ScrollView>
             </SafeAreaView>
         </KeyboardAvoidingView>

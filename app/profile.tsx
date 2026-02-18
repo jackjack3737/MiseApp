@@ -1,13 +1,20 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, TextInput, KeyboardAvoidingView, Platform, LayoutAnimation, UIManager } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, TextInput, KeyboardAvoidingView, Platform, LayoutAnimation, UIManager, Linking, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Save, Plus, Minus, Target, User, Zap, ArrowLeft, RefreshCw, Cpu, Timer, ChevronDown, ChevronUp, Activity, Footprints, Flame, Scale } from 'lucide-react-native';
+import { Save, Plus, Minus, Target, User, Zap, ArrowLeft, RefreshCw, Cpu, Timer, ChevronDown, ChevronUp, Activity, Footprints, Flame, Scale, Download, Upload, Shield, AlertTriangle } from 'lucide-react-native';
 
 import useHealthConnect from '../hooks/useHealthConnect';
 import SmartHint from '../components/SmartHint';
 import { BG, CARD_BG, TEXT_PRIMARY, TEXT_SECONDARY, ACCENT_BTN, RING_TRACK, RED_ALERT } from '../constants/theme';
+
+const LAST_BACKUP_TIMESTAMP_KEY = '@last_backup_timestamp';
+const BACKUP_FILENAME = 'KetoLab_Backup.json';
+const BACKUP_NUDGE_DAYS = 30;
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -120,6 +127,10 @@ export default function ProfileScreen() {
   const [carbs, setCarbs] = useState(20);
   const [fat, setFat] = useState(150);
 
+  const [needsBackup, setNeedsBackup] = useState(false);
+  const [backupExporting, setBackupExporting] = useState(false);
+  const [backupImporting, setBackupImporting] = useState(false);
+
   const updateTargetDate = useCallback((weeks: number) => {
     const date = new Date();
     date.setDate(date.getDate() + (weeks * 7));
@@ -139,6 +150,109 @@ export default function ProfileScreen() {
   }, [healthWeight]);
 
   useEffect(() => { updateTargetDate(weeksTarget); }, [weeksTarget, updateTargetDate]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const last = await AsyncStorage.getItem(LAST_BACKUP_TIMESTAMP_KEY);
+        if (!last) {
+          setNeedsBackup(true);
+          return;
+        }
+        const lastDate = new Date(last).getTime();
+        const daysSince = (Date.now() - lastDate) / (24 * 60 * 60 * 1000);
+        setNeedsBackup(daysSince > BACKUP_NUDGE_DAYS);
+      } catch {
+        setNeedsBackup(true);
+      }
+    })();
+  }, []);
+
+  async function exportBackup() {
+    setBackupExporting(true);
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const payload: Record<string, string> = {};
+      for (const key of keys) {
+        const value = await AsyncStorage.getItem(key);
+        if (value != null) payload[key] = value;
+      }
+      const now = new Date().toISOString();
+      payload[LAST_BACKUP_TIMESTAMP_KEY] = now;
+      const filePath = `${FileSystem.cacheDirectory}${BACKUP_FILENAME}`;
+      await FileSystem.writeAsStringAsync(filePath, JSON.stringify(payload, null, 2), { encoding: FileSystem.EncodingType.UTF8 });
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Condivisione non disponibile', 'Su questo dispositivo non puoi condividere il file. Il backup è stato salvato nella cache dell\'app.');
+        setNeedsBackup(false);
+        setBackupExporting(false);
+        return;
+      }
+      await Sharing.shareAsync(filePath, { mimeType: 'application/json', dialogTitle: 'Salva backup KetoLab' });
+      await AsyncStorage.setItem(LAST_BACKUP_TIMESTAMP_KEY, now);
+      setNeedsBackup(false);
+    } catch (e: any) {
+      const msg = (e?.message ?? String(e)).toLowerCase();
+      if (msg.includes('sharing') || msg.includes('expo') || msg.includes('native module')) {
+        Alert.alert(
+          'Modulo non disponibile',
+          'Per esportare il backup usa la versione sviluppo dell\'app (build nativa), non Expo Go. Esegui: npx expo run:android'
+        );
+      } else {
+        Alert.alert('Errore', 'Non è stato possibile creare il backup. Riprova più tardi.');
+      }
+    } finally {
+      setBackupExporting(false);
+    }
+  }
+
+  async function importBackup() {
+    setBackupImporting(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/json',
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) {
+        setBackupImporting(false);
+        return;
+      }
+      const uri = result.assets[0].uri;
+      const content = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.UTF8 });
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(content);
+      } catch {
+        Alert.alert('File non valido', 'Il file selezionato non è un JSON valido. Scegli un backup esportato da KetoLab.');
+        setBackupImporting(false);
+        return;
+      }
+      if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+        Alert.alert('File non valido', 'Il contenuto del file non è compatibile con KetoLab. Usa un file di backup esportato da questa app.');
+        setBackupImporting(false);
+        return;
+      }
+      const knownKeys = ['@user_profile', '@user_daily_logs', '@user_daily_symptom_factor'];
+      const hasKnown = Object.keys(data).some((k) => knownKeys.includes(k));
+      if (!hasKnown) {
+        Alert.alert('File non riconosciuto', 'Il file non sembra un backup di KetoLab. Controlla di aver selezionato il file corretto.');
+        setBackupImporting(false);
+        return;
+      }
+      for (const [key, value] of Object.entries(data)) {
+        if (typeof value === 'string') {
+          await AsyncStorage.setItem(key, value);
+        } else if (value != null && typeof value === 'object') {
+          await AsyncStorage.setItem(key, JSON.stringify(value));
+        }
+      }
+      Alert.alert('Ripristino completato', 'Dati ripristinati. Riavvia l\'app per applicare le modifiche.');
+    } catch (e) {
+      Alert.alert('Errore', 'Non è stato possibile ripristinare il backup. Controlla il file e riprova.');
+    } finally {
+      setBackupImporting(false);
+    }
+  }
 
   async function loadProfile() {
     try {
@@ -226,9 +340,9 @@ export default function ProfileScreen() {
       // STORAGE_KEY (@user_profile): Tracker legge targetCalories, protein, carbs, fat per i target macro (Tanks + Metabolic Reactor)
       const profileData = { targetCalories: kcal, protocol, protein, carbs, fat, weight, targetWeight, height, age, weeksTarget, gender, activityMult };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(profileData));
-      Alert.alert('LOG', 'SINCRONIZZAZIONE COMPLETATA');
+      Alert.alert('Fatto!', 'I tuoi parametri sono stati salvati correttamente.');
       if (router.canGoBack()) router.back();
-    } catch (e) { Alert.alert('ERRORE', 'DATABASE LATERALE'); }
+    } catch (e) { Alert.alert('Ops!', 'C\'è stato un problema nel salvataggio. Riprova.'); }
   }
 
   const CustomDropdown = ({ label, value, options, isOpen, onToggle, onSelect }: any) => {
@@ -278,7 +392,7 @@ export default function ProfileScreen() {
       >
       <ScrollView 
         ref={scrollRef}
-        contentContainerStyle={{ padding: 20, paddingBottom: 150 }}
+        contentContainerStyle={{ padding: 20, paddingBottom: 180 }}
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled={true} 
       >
@@ -340,11 +454,11 @@ export default function ProfileScreen() {
 
         <Text style={styles.sectionTitle}>Profilo utente</Text>
         <View style={[styles.card, { zIndex: 1000 }]}>
-            <CustomDropdown label="SESSO_BIOLOGICO" value={gender} options={GENDER_OPTIONS} isOpen={showGenderMenu} onToggle={() => { setShowGenderMenu(!showGenderMenu); setShowActivityMenu(false); }} onSelect={setGender} />
-            <CustomDropdown label="COEFFICIENTE_ATTIVITÀ" value={activityMult} options={ACTIVITY_LEVELS} isOpen={showActivityMenu} onToggle={() => { setShowActivityMenu(!showActivityMenu); setShowGenderMenu(false); }} onSelect={setActivityMult} />
+            <CustomDropdown label="Sesso" value={gender} options={GENDER_OPTIONS} isOpen={showGenderMenu} onToggle={() => { setShowGenderMenu(!showGenderMenu); setShowActivityMenu(false); }} onSelect={setGender} />
+            <CustomDropdown label="Livello di attività" value={activityMult} options={ACTIVITY_LEVELS} isOpen={showActivityMenu} onToggle={() => { setShowActivityMenu(!showActivityMenu); setShowGenderMenu(false); }} onSelect={setActivityMult} />
             <View style={{flexDirection:'row', gap:10}}>
-                 <View style={styles.inputBox}><Text style={styles.fieldLabel}>ETÀ</Text><TextInput style={styles.textInput} keyboardType="numeric" value={age.toString()} onChangeText={(t) => setAge(Number(t) || 0)}/></View>
-                 <View style={styles.inputBox}><Text style={styles.fieldLabel}>ALTEZZA_CM</Text><TextInput style={styles.textInput} keyboardType="numeric" value={height.toString()} onChangeText={(t) => setHeight(Number(t) || 0)}/></View>
+                 <View style={styles.inputBox}><Text style={styles.fieldLabel}>Età</Text><TextInput style={styles.textInput} keyboardType="numeric" value={age.toString()} onChangeText={(t) => setAge(Number(t) || 0)}/></View>
+                 <View style={styles.inputBox}><Text style={styles.fieldLabel}>Altezza (cm)</Text><TextInput style={styles.textInput} keyboardType="numeric" value={height.toString()} onChangeText={(t) => setHeight(Number(t) || 0)}/></View>
             </View>
         </View>
 
@@ -394,14 +508,15 @@ export default function ProfileScreen() {
                 const bmr = (10 * w) + (6.25 * height) - (5 * age) + (gender === 'male' ? 5 : -161);
                 const tdee = Math.round(bmr * activityMult);
                 Alert.alert(
-                  'BMR & TDEE',
-                  `Metabolismo Basale (BMR): ${Math.round(bmr)} kcal\nFormula Harris-Benedict rivisitata. È l'energia che bruci a riposo assoluto.\n\nTDEE (fabbisogno giornaliero): ${tdee} kcal\nBMR × coefficiente attività.`
+                  'Metabolismo',
+                  `Calorie a riposo (BMR): ${Math.round(bmr)} kcal al giorno.\n\nFabbisogno giornaliero stimato (TDEE): ${tdee} kcal.\n\nQuesti valori servono a calcolare i tuoi target di peso e macro.`
                 );
               }}
               activeOpacity={0.8}
             >
                 <Text style={styles.summaryText}>Modalità: {Number(weight - targetWeight) >= 0 ? 'Deficit' : 'Surplus'}</Text>
                 <Text style={styles.summaryText}>Delta: {Math.abs(Number((weight - targetWeight).toFixed(1)))} kg in {weeksTarget * 7} giorni</Text>
+                <Text style={styles.summaryText}>Obiettivo: {targetWeight} kg in {weeksTarget} settimane</Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={() => Alert.alert('BMI', 'Indice di massa corporea: peso (kg) / altezza² (m). Sottopeso <18.5, Normale 18.5-25, Sovrappeso 25-30, Obeso ≥30. Usato per stimare il range di peso salutare.')} activeOpacity={0.9}>
@@ -432,10 +547,79 @@ export default function ProfileScreen() {
             </View>
         </View>
 
-        <TouchableOpacity style={styles.resetBtnAction} onPress={() => Alert.alert("RESET", "Cancellare tutti i dati?", [{text: "NO"}, {text: "SÌ", onPress: () => AsyncStorage.clear()}])}>
-            <Text style={styles.resetBtnText}>WIPE_ALL_DATA</Text>
+        <View style={styles.sectionTitleRow}>
+          <Text style={styles.sectionTitle}>SICUREZZA DATI</Text>
+          {needsBackup && (
+            <View style={styles.backupNudgeBadge}>
+              <AlertTriangle size={12} color={RED_ALERT} />
+              <Text style={styles.backupNudgeText}>Backup consigliato</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.backupCard}>
+          <View style={styles.backupInfoRow}>
+            <Shield size={16} color={TEXT_SECONDARY} />
+            <Text style={styles.backupInfoText}>
+              KetoLab non salva i tuoi dati su cloud esterni per proteggere la tua privacy. Esegui un backup manuale ogni mese per non perdere i tuoi progressi.
+            </Text>
+          </View>
+          <View style={styles.backupButtonsRow}>
+            <TouchableOpacity
+              style={styles.backupBtn}
+              onPress={exportBackup}
+              disabled={backupExporting}
+              activeOpacity={0.8}
+            >
+              {backupExporting ? (
+                <ActivityIndicator size="small" color={CARD_BG} />
+              ) : (
+                <Download size={18} color={CARD_BG} />
+              )}
+              <Text style={styles.backupBtnText}>Esporta Backup</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.backupBtn, styles.backupBtnSecondary]}
+              onPress={importBackup}
+              disabled={backupImporting}
+              activeOpacity={0.8}
+            >
+              {backupImporting ? (
+                <ActivityIndicator size="small" color={ACCENT_BTN} />
+              ) : (
+                <Upload size={18} color={ACCENT_BTN} />
+              )}
+              <Text style={styles.backupBtnTextSecondary}>Ripristina da file</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={styles.resetBtnAction}
+          onPress={() =>
+            Alert.alert(
+              'Sei sicuro?',
+              'Questa azione cancellerà tutto il tuo diario e i tuoi progressi. I dati vengono salvati solo su questo telefono, quindi non potranno essere recuperati.',
+              [
+                { text: 'Annulla', style: 'cancel' },
+                { text: 'Sì, elimina tutto', style: 'destructive', onPress: () => AsyncStorage.clear() },
+              ]
+            )
+          }
+        >
+          <Text style={styles.resetBtnText}>Elimina tutti i dati</Text>
         </TouchableOpacity>
 
+        <View style={styles.legalSection}>
+          <TouchableOpacity onPress={() => Linking.openURL('https://tuosito.com/privacy')}>
+            <Text style={styles.legalLink}>Privacy Policy</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => Linking.openURL('https://tuosito.com/supporto')}>
+            <Text style={styles.legalLink}>Supporto</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalDisclaimer}>
+            I tuoi dati sanitari e il diario alimentare vengono salvati esclusivamente sul tuo dispositivo. Nessun dato personale viene trasmesso a server esterni.
+          </Text>
+        </View>
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -471,6 +655,17 @@ const styles = StyleSheet.create({
   
   refreshBtn: { backgroundColor: ACCENT_BTN, padding: 8, borderRadius: 10 },
   sectionTitle: { color: TEXT_SECONDARY, fontSize: 12, fontWeight: '600', marginBottom: 10 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  backupNudgeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: `${RED_ALERT}20`, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: RED_ALERT },
+  backupNudgeText: { color: RED_ALERT, fontSize: 10, fontWeight: '600' },
+  backupCard: { backgroundColor: CARD_BG, padding: 18, borderRadius: 16, marginBottom: 24, borderWidth: 1, borderColor: RING_TRACK, ...Platform.select({ android: { elevation: 2 }, ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 6 } }) },
+  backupInfoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 16 },
+  backupInfoText: { flex: 1, color: TEXT_SECONDARY, fontSize: 12, lineHeight: 18 },
+  backupButtonsRow: { flexDirection: 'row', gap: 12 },
+  backupBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: ACCENT_BTN, paddingVertical: 14, borderRadius: 12 },
+  backupBtnText: { color: CARD_BG, fontWeight: '600', fontSize: 14 },
+  backupBtnSecondary: { backgroundColor: 'transparent', borderWidth: 1, borderColor: ACCENT_BTN },
+  backupBtnTextSecondary: { color: ACCENT_BTN, fontWeight: '600', fontSize: 14 },
   
   card: { backgroundColor: CARD_BG, padding: 18, borderRadius: 16, marginBottom: 24, borderWidth: 1, borderColor: RING_TRACK, ...Platform.select({ android: { elevation: 2 }, ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 6 } }) },
   fieldLabel: { color: TEXT_SECONDARY, fontSize: 11, fontWeight: '600', marginBottom: 6 },
@@ -512,4 +707,7 @@ const styles = StyleSheet.create({
   macroGrid: { marginTop: 12 },
   resetBtnAction: { marginTop: 24, padding: 16, borderStyle: 'dotted', borderWidth: 1, borderColor: RED_ALERT, borderRadius: 10 },
   resetBtnText: { color: RED_ALERT, fontSize: 12, fontWeight: '600', textAlign: 'center' },
+  legalSection: { marginTop: 32, marginBottom: 48, alignItems: 'center', paddingHorizontal: 20 },
+  legalLink: { color: ACCENT_BTN, fontSize: 14, fontWeight: '600', marginBottom: 12, textDecorationLine: 'underline' },
+  legalDisclaimer: { color: TEXT_SECONDARY, fontSize: 11, textAlign: 'center', marginTop: 16, lineHeight: 18 },
 });

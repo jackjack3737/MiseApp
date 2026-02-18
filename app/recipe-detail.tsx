@@ -58,7 +58,7 @@ export default function RecipeDetailScreen() {
         setIngredientsList([]);
       }
     } catch (e) { 
-      Alert.alert("SISTEMA", "FALLIMENTO_RECUPERO_DATI");
+      Alert.alert("Ops!", "C'è stato un problema nel recupero dei dati. Riprova.");
     } finally { setLoading(false); }
   }
 
@@ -71,16 +71,16 @@ export default function RecipeDetailScreen() {
       const raw = await AsyncStorage.getItem('@user_shopping_cart');
       const cart: string[] = raw ? JSON.parse(raw) : [];
       if (cart.some((item) => item.toLowerCase() === finalIngredient.toLowerCase())) {
-        Alert.alert("LISTA SPESA", "COMPONENTE_GIÀ_PRESENTE");
+        Alert.alert("Attenzione", "Alimento già aggiunto");
         return;
       }
       cart.push(finalIngredient);
       await AsyncStorage.setItem('@user_shopping_cart', JSON.stringify(cart));
       if (Platform.OS !== 'web') Vibration.vibrate(50);
       setAddedToCart((prev) => new Set(prev).add(finalIngredient));
-      Alert.alert("LISTA SPESA", "COMPONENTE ACQUISITO");
+      Alert.alert("Fatto!", "Aggiunto alla lista della spesa");
     } catch (e) {
-      Alert.alert("ERRORE", "SCRITTURA_CARRELLO_FALLITA");
+      Alert.alert("Ops!", "C'è stato un problema nel salvataggio. Riprova.");
     }
   }
 
@@ -108,14 +108,14 @@ export default function RecipeDetailScreen() {
 
       // Validazione del contenuto per intercettare rifiuti o errori di sicurezza
       if (!safeContent || safeContent.includes("ERRORE_SICUREZZA") || safeContent.includes("ERRORE_PARSING_AI")) {
-          setAiProtocol("⚠️ RIFIUTO_SISTEMA: Protocollo protetto o non generabile. Prova a variare la grammatura target.");
+          setAiProtocol("L'intelligenza artificiale non ha compreso la richiesta. Prova a variare la grammatura o a semplificare.");
       } else {
           setAiProtocol(safeContent);
       }
 
     } catch (e: any) {
       console.error(e);
-      Alert.alert("SYS_ERROR", "ERRORE_COMUNICAZIONE_IA");
+      Alert.alert("Ops!", "L'intelligenza artificiale non ha compreso la richiesta. Puoi ripetere in modo più semplice?");
     } finally {
       setGenerating(false);
     }
@@ -142,9 +142,9 @@ export default function RecipeDetailScreen() {
         await AsyncStorage.setItem('@user_daily_logs', JSON.stringify([newLog, ...logs]));
 
         Vibration.vibrate(100);
-        router.push('/(tabs)/tracker');
+        router.push('/tracker');
     } catch (error) {
-        Alert.alert("ERRORE", "SCRITTURA_DATABASE_FALLITA");
+        Alert.alert("Ops!", "C'è stato un problema nel salvataggio. Riprova.");
     } finally { setLogging(false); }
   }
 

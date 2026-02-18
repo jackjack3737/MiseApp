@@ -19,6 +19,28 @@ const LIGHT_CARB = DS.carb;
 const LIGHT_STEPS = DS.protein;
 const LIGHT_SPORT = TRACKER_BLACK.SYMPTOM;
 
+/** Metabolic Detective: interpreta trend peso vs carbo/stress. */
+export function analyzeWeightTrend(
+  weightDiff: number,
+  carbIntake: number,
+  stressLevel: 'Low' | 'Medium' | 'High',
+  options?: { deficit?: boolean; prevCarbs?: number }
+): string | null {
+  const deficit = options?.deficit ?? false;
+  const prevCarbs = options?.prevCarbs ?? 0;
+  if (weightDiff < -0.5 && carbIntake < 50) return 'Water Drop: Perdita liquidi/glicogeno.';
+  if (Math.abs(weightDiff) < 0.2 && deficit && stressLevel === 'High') return 'Cortisol Stall: Ritenzione idrica da stress.';
+  if (weightDiff > 0.5 && prevCarbs > 150) return 'Glycogen Rebound: Ricarica muscolare.';
+  return null;
+}
+
+/** Rocca Index: efficienza mitocondriale (metri per battito). */
+export function computeRoccaIndex(distanceMeters: number, durationMinutes: number, avgHeartRate: number): number {
+  if (durationMinutes <= 0 || avgHeartRate <= 0) return 0;
+  const metersPerMin = distanceMeters / durationMinutes;
+  return metersPerMin / avgHeartRate;
+}
+
 export interface ReactorProps {
   baseTarget: number;
   currentCarbs: number;
@@ -35,13 +57,48 @@ export interface ReactorProps {
   lastWorkoutType?: WorkoutCategory;
   /** 'light' = Material 3 light theme */
   variant?: 'dark' | 'light';
+  /** Prevenzione infiammazione: peso (kg), altezza (cm), tipo attività (es. 'Running') */
+  weight?: number;
+  height?: number;
+  activityType?: string;
+  /** Metabolic Detective: diff peso (kg), stress, deficit calorico, carbo giorno prima */
+  weightDiff?: number;
+  stressLevel?: 'Low' | 'Medium' | 'High';
+  inCaloricDeficit?: boolean;
+  prevDayCarbs?: number;
+  /** Rocca Index: distanza (m), durata (min), FC media */
+  distanceMeters?: number;
+  durationMinutes?: number;
+  avgHeartRate?: number;
 }
 
-export default function MetabolicReactor({ baseTarget, currentCarbs, stepsBonus, sportBonus, sleepFactor = 1.0, sleepHours, dynamicCarbLimit, steps = 0, activeCalories = 0, symptomFactor = 1.0, symptomName, lastWorkoutType, variant = 'dark' }: ReactorProps) {
+export default function MetabolicReactor({
+  baseTarget, currentCarbs, stepsBonus, sportBonus, sleepFactor = 1.0, sleepHours, dynamicCarbLimit,
+  steps = 0, activeCalories = 0, symptomFactor = 1.0, symptomName, lastWorkoutType, variant = 'dark',
+  weight, height, activityType,
+  weightDiff = 0, stressLevel = 'Medium', inCaloricDeficit = false, prevDayCarbs = 0,
+  distanceMeters, durationMinutes, avgHeartRate,
+}: ReactorProps) {
   const light = variant === 'light';
   const [showDetails, setShowDetails] = useState(false);
 
   const workoutUI = lastWorkoutType ? getWorkoutUI(lastWorkoutType) : null;
+
+  // 1. Prevenzione infiammazione (High Impact)
+  const bmi = weight != null && height != null && height > 0
+    ? weight / Math.pow(height / 100, 2)
+    : null;
+  const isHighRisk = (bmi != null && bmi > 27) && activityType === 'Running';
+
+  // 2. Metabolic Detective
+  const detectiveMessage = (weightDiff !== 0 || currentCarbs > 0 || stressLevel !== 'Medium')
+    ? analyzeWeightTrend(weightDiff, currentCarbs, stressLevel, { deficit: inCaloricDeficit, prevCarbs: prevDayCarbs })
+    : null;
+
+  // 3. Rocca Index (Oxygen Efficiency)
+  const roccaIndex = (distanceMeters != null && durationMinutes != null && durationMinutes > 0 && avgHeartRate != null && avgHeartRate > 0)
+    ? computeRoccaIndex(distanceMeters, durationMinutes, avgHeartRate)
+    : null;
 
   const totalLimit = baseTarget + stepsBonus + sportBonus;
   const safeCap = 50;
@@ -135,6 +192,23 @@ export default function MetabolicReactor({ baseTarget, currentCarbs, stepsBonus,
             <View style={styles.row}>
               <Text style={[labelStyle, { color: light ? '#EA580C' : STATUS_SYMPTOM }]}>🩺 Sintomo (Medical)</Text>
               <Text style={[valueStyle, { color: light ? '#EA580C' : STATUS_SYMPTOM }]}>{symptomName} (-{symptomPenaltyPct}%)</Text>
+            </View>
+          )}
+          {isHighRisk && (
+            <Text style={[styles.inflammationWarning, light && styles.inflammationWarningLight]}>
+              ⚠️ Carico articolare eccessivo (Peso ×3). Cortisolo in aumento. Passa a Camminata in Salita.
+            </Text>
+          )}
+          {detectiveMessage != null && (
+            <View style={styles.row}>
+              <Text style={labelStyle}>🔍 Metabolic Detective</Text>
+              <Text style={[valueStyle, { flex: 1, marginLeft: 8, textAlign: 'right' }]} numberOfLines={2}>{detectiveMessage}</Text>
+            </View>
+          )}
+          {roccaIndex != null && roccaIndex > 0 && (
+            <View style={styles.row}>
+              <Text style={labelStyle}>🫀 Rocca Index (Oxygen Efficiency)</Text>
+              <Text style={valueStyle}>{roccaIndex.toFixed(2)} m/bpm</Text>
             </View>
           )}
           {(!isOverdrive && totalLimit > safeCap) && (
@@ -251,6 +325,14 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   capWarningLight: { color: '#DC2626' },
+  inflammationWarning: {
+    color: '#FF9800',
+    fontSize: 11,
+    marginTop: 8,
+    marginBottom: 4,
+    fontWeight: '600',
+  },
+  inflammationWarningLight: { color: '#EA580C' },
   sleepPenalty: {
     color: STATUS_RED,
     fontSize: 10,

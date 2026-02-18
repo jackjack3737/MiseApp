@@ -130,6 +130,7 @@ function createDefaultValue(): BioContextValue {
       refreshWeather: noopAsync,
       refreshHealth: noop,
       requestHealthPermissions: noop,
+      openHealthConnectSettings: noop,
       logWorkout: noop,
     },
   };

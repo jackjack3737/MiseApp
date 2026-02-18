@@ -55,7 +55,7 @@ export function createEmptyDailyRecord(date: string): DailyBlackboxRecord {
       fatiguePredictorScore: 0,
     },
     medical: { symptoms: [] },
-    environment: { temp: 20, condition: '—', saltAdvice: null },
+    environment: { temp: 20, condition: '—', saltAdvice: undefined },
     updatedAt: new Date().toISOString(),
   };
 }

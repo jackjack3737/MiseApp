@@ -1,12 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { useFocusEffect } from 'expo-router';
 import { Activity, AlertTriangle, Beef, Calendar, Check, ChevronLeft, ChevronRight, Cpu, Edit3, Flame, Footprints, Moon, ShieldAlert, Trash2, TrendingUp, X, Zap } from 'lucide-react-native';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Dimensions, FlatList, Modal, Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { TrendsSummary } from '../../components/TrendsSummary';
 import { DS, TRACKER_BLACK } from '../../constants/designSystem';
 import { RED_ALERT, RING_CARB, RING_FAT, RING_PROTEIN, RING_TRACK } from '../../constants/theme';
 import type { DailyBlackboxRecord } from '../../types/blackbox';
+import { fetchBioForDate } from '../../hooks/useHealthConnect';
 import { calculateCorrelations } from '../../utils/blackboxCorrelations';
 
 const STATUS_SYMPTOM = TRACKER_BLACK.SYMPTOM;
@@ -101,6 +104,17 @@ export default function HistoryScreen() {
   const [userTargets, setUserTargets] = useState({ kcal: 2000, carbs: 50 });
   const [loading, setLoading] = useState(true);
 
+  // Pattern highlight (Note dell'Investigatore → giorni evidenziati)
+  const [highlightedPatternDates, setHighlightedPatternDates] = useState<string[]>([]);
+  // CalendarInsights caricato solo fuori da Expo Go (evita require expo-sqlite)
+  const [CalendarInsights, setCalendarInsights] = useState<React.ComponentType<{ currentMonth: Date; onHighlightDates?: (dates: string[]) => void }> | null>(null);
+
+  useEffect(() => {
+    if (Constants.appOwnership === 'expo') return;
+    const m = require('../../components/CalendarInsights');
+    setCalendarInsights(() => m.CalendarInsights);
+  }, []);
+
   // Modale
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
@@ -192,16 +206,22 @@ export default function HistoryScreen() {
     updateCurrentView(selectedDate, processed);
   };
 
-  const updateCurrentView = (dateStr: string, dataMap: any) => {
+  const updateCurrentView = useCallback(async (dateStr: string, dataMap: any) => {
       setDayDetails(dataMap[dateStr] || null);
-      setBioData(getBioForDate(dateStr)); // Carica anche i dati bio finti
-  };
+      const fallback = getBioForDate(dateStr);
+      const fromHC = await fetchBioForDate(dateStr);
+      if (fromHC) {
+        setBioData({ ...fallback, steps: fromHC.steps, sleepHours: fromHC.sleepHours, activeKcal: fromHC.activeKcal });
+      } else {
+        setBioData(fallback);
+      }
+  }, []);
 
   // --- 3. GESTIONE AZIONI ---
   const handleDelete = (id: string) => {
-      Alert.alert("ELIMINA", "Sicuro di voler cancellare?", [
-          { text: "ANNULLA", style: "cancel" },
-          { text: "ELIMINA", style: "destructive", onPress: async () => {
+      Alert.alert("Sei sicuro?", "Vuoi eliminare questo elemento dal diario?", [
+          { text: "Annulla", style: "cancel" },
+          { text: "Elimina", style: "destructive", onPress: async () => {
               const logsJson = await AsyncStorage.getItem('@user_daily_logs');
               if (logsJson) {
                   const logs = JSON.parse(logsJson);
@@ -229,7 +249,7 @@ export default function HistoryScreen() {
               processHistory(updatedLogs, userTargets);
               setEditModalVisible(false);
           }
-      } catch (e) { Alert.alert("ERRORE", "SALVATAGGIO_FALLITO"); }
+      } catch (e) { Alert.alert("Ops!", "C'è stato un problema nel salvataggio. Riprova."); }
   };
 
   // --- 4. CALENDARIO ---
@@ -237,6 +257,7 @@ export default function HistoryScreen() {
     const newDate = new Date(currentMonth);
     newDate.setMonth(newDate.getMonth() + delta);
     setCurrentMonth(newDate);
+    setHighlightedPatternDates([]);
   };
 
   const handleDayPress = (day: number) => {
@@ -269,6 +290,7 @@ export default function HistoryScreen() {
     const dateStr = `${year}-${month.toString().padStart(2, '0')}-${item.day.toString().padStart(2, '0')}`;
     const dayData = historyData[dateStr];
     const isSelected = dateStr === selectedDate;
+    const isPatternHighlight = highlightedPatternDates.includes(dateStr);
 
     return (
       <TouchableOpacity
@@ -281,6 +303,7 @@ export default function HistoryScreen() {
           {dayData && dayData.status === 'bad' && <View style={[styles.segment, styles.segmentRed]} />}
           {dayData && dayData.hasSymptom && <View style={[styles.segment, styles.segmentSymptom]} />}
         </View>
+        {isPatternHighlight && <View style={styles.patternDot} />}
       </TouchableOpacity>
     );
   };
@@ -393,125 +416,6 @@ export default function HistoryScreen() {
     );
   };
 
-  // --- Ultimi 7 giorni (da oggi indietro) ---
-  const getLast7Days = () => {
-    const out: string[] = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      out.push(d.toISOString().split('T')[0]);
-    }
-    return out.reverse();
-  };
-
-  const getDayLabel = (dateStr: string) => {
-    const d = new Date(dateStr + 'T12:00:00');
-    const dayIndex = (d.getDay() + 6) % 7;
-    return ['L', 'M', 'M', 'G', 'V', 'S', 'D'][dayIndex];
-  };
-
-  const TrendsDashboard = () => {
-    const days = getLast7Days();
-    const targetKcal = userTargets.kcal || 2000;
-    const maxKcal = Math.max(targetKcal, 2000, ...days.map(d => historyData[d]?.totalKcal || 0));
-    const maxSleep = 10;
-    const sleepTarget = 7;
-
-    const metabolicBars = days.map((date) => {
-      const day = historyData[date];
-      const kcal = day ? day.totalKcal : 0;
-      const isOver = kcal > targetKcal;
-      const heightPct = maxKcal > 0 ? Math.min(100, (kcal / maxKcal) * 100) : 0;
-      return { date, kcal, isOver, heightPct, label: getDayLabel(date) };
-    });
-
-    const sleepBars = days.map((date) => {
-      const bio = getBioForDate(date);
-      const hours = bio?.sleepHours ?? 0;
-      const heightPct = Math.min(100, (hours / maxSleep) * 100);
-      return { date, hours, heightPct, label: getDayLabel(date) };
-    });
-
-    let sumC = 0, sumP = 0, sumF = 0, count = 0;
-    days.forEach(d => {
-      const day = historyData[d];
-      if (day && (day.totalCarbs + day.totalProt + day.totalFat) > 0) {
-        sumC += day.totalCarbs; sumP += day.totalProt; sumF += day.totalFat;
-        count++;
-      }
-    });
-    const tot = sumC + sumP + sumF;
-    const avgC = tot > 0 ? (sumC / tot) * 100 : 33.33;
-    const avgP = tot > 0 ? (sumP / tot) * 100 : 33.33;
-    const avgF = tot > 0 ? (sumF / tot) * 100 : 33.34;
-
-    return (
-      <View style={styles.trendsContainer}>
-        <View style={styles.trendCard}>
-          <Text style={styles.trendCardTitle}>Carico metabolico</Text>
-          <Text style={styles.trendCardSub}>Ultimi 7 giorni • Target {targetKcal} kcal</Text>
-          <View style={styles.barChartRow}>
-            {metabolicBars.map((bar, i) => (
-              <View key={bar.date} style={styles.barChartCol}>
-                <View style={styles.barChartBarWrap}>
-                  <View
-                    style={[
-                      styles.barChartBar,
-                      { height: `${Math.max(bar.heightPct, 4)}%` },
-                      bar.kcal === 0 ? styles.barChartBarEmpty : (bar.isOver ? styles.barChartBarRed : styles.barChartBarGreen)
-                    ]}
-                  />
-                </View>
-                <Text style={styles.barChartLabel}>{bar.label}</Text>
-                {bar.kcal > 0 && <Text style={styles.barChartVal} numberOfLines={1}>{Math.round(bar.kcal)}</Text>}
-              </View>
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.trendCard}>
-          <Text style={styles.trendCardTitle}>Qualità del sonno</Text>
-          <Text style={styles.trendCardSub}>Ore per notte • Target 7h</Text>
-          <View style={styles.sleepChartWrap}>
-            <View style={[styles.sleepTargetLine, { bottom: `${(sleepTarget / maxSleep) * 100}%` }]} />
-            <View style={styles.barChartRow}>
-              {sleepBars.map((bar) => (
-                <View key={bar.date} style={styles.barChartCol}>
-                  <View style={styles.barChartBarWrap}>
-                    <View
-                      style={[
-                        styles.barChartBar,
-                        { height: `${Math.max(bar.heightPct, 4)}%` },
-                        bar.hours === 0 ? styles.barChartBarEmpty : styles.barChartBarSleep
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.barChartLabel}>{bar.label}</Text>
-                  {bar.hours > 0 && <Text style={styles.barChartVal}>{bar.hours.toFixed(1)}h</Text>}
-                </View>
-              ))}
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.trendCard}>
-          <Text style={styles.trendCardTitle}>Ripartizione macro media</Text>
-          <Text style={styles.trendCardSub}>% media ultima settimana</Text>
-          <View style={styles.macroBarTrack}>
-            <View style={[styles.macroBarSegment, { flex: avgC }, { backgroundColor: RING_CARB }]} />
-            <View style={[styles.macroBarSegment, { flex: avgP }, { backgroundColor: RING_PROTEIN }]} />
-            <View style={[styles.macroBarSegment, { flex: avgF }, { backgroundColor: RING_FAT }]} />
-          </View>
-          <View style={styles.macroLegend}>
-            <View style={styles.macroLegendItem}><View style={[styles.macroLegendDot, { backgroundColor: RING_CARB }]} /><Text style={styles.macroLegendText}>C {avgC.toFixed(0)}%</Text></View>
-            <View style={styles.macroLegendItem}><View style={[styles.macroLegendDot, { backgroundColor: RING_PROTEIN }]} /><Text style={styles.macroLegendText}>P {avgP.toFixed(0)}%</Text></View>
-            <View style={styles.macroLegendItem}><View style={[styles.macroLegendDot, { backgroundColor: RING_FAT }]} /><Text style={styles.macroLegendText}>F {avgF.toFixed(0)}%</Text></View>
-          </View>
-        </View>
-      </View>
-    );
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={DARK_BG} />
@@ -565,6 +469,13 @@ export default function HistoryScreen() {
                 scrollEnabled={false}
             />
         </View>
+
+        {CalendarInsights && (
+          <CalendarInsights
+            currentMonth={currentMonth}
+            onHighlightDates={setHighlightedPatternDates}
+          />
+        )}
 
         <View style={styles.detailSection}>
             <Text style={styles.detailDateTitle}>
@@ -633,7 +544,14 @@ export default function HistoryScreen() {
           </>
         )}
 
-        {viewMode === 'trends' && <TrendsDashboard />}
+        {viewMode === 'trends' && (
+          <TrendsSummary
+            historyData={historyData}
+            getBioForDate={getBioForDate}
+            targetKcal={userTargets.kcal}
+            targetCarbs={userTargets.carbs}
+          />
+        )}
       </ScrollView>
 
       {/* MODALE DI MODIFICA */}
@@ -732,6 +650,17 @@ const styles = StyleSheet.create({
   segmentGreen: { backgroundColor: '#22C55E' },
   segmentRed: { backgroundColor: RED_ALERT },
   segmentSymptom: { backgroundColor: STATUS_SYMPTOM },
+  patternDot: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: RED_ALERT,
+    borderWidth: 1,
+    borderColor: DARK_CARD,
+  },
 
   detailSection: { padding: 20, marginTop: 12 },
   detailDateTitle: { color: DARK_TEXT, fontSize: 16, fontWeight: '700', marginBottom: 16 },

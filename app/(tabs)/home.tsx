@@ -10,8 +10,8 @@ export default function HomeTab() {
   const [refreshKey, setRefreshKey] = useState(0);
   useFocusEffect(
     useCallback(() => {
-      // Breve delay così AsyncStorage (scritture dal Tracker) è aggiornato prima del refresh
-      const t = setTimeout(() => setRefreshKey((k) => k + 1), 150);
+      // Delay sufficiente così AsyncStorage (scritture dal Tracker) è aggiornato prima del refresh
+      const t = setTimeout(() => setRefreshKey((k) => k + 1), 400);
       return () => clearTimeout(t);
     }, [])
   );

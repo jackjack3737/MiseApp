@@ -1,5 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   LayoutAnimation,
@@ -11,7 +12,9 @@ import {
   UIManager,
   View,
 } from 'react-native';
+import { analyzeWeightTrend } from './MetabolicReactor';
 import { useBio } from '../context/BioContext';
+import useHealthConnect from '../hooks/useHealthConnect';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -115,11 +118,15 @@ const InteractiveMetric = ({
       {leftElement}
       <View style={styles.interactiveMetricContent}>
         <View style={styles.interactiveMetricHeader}>
-          <Text style={styles.metricLabel}>{label}</Text>
+          <View style={styles.interactiveMetricLabelWrap}>
+            <Text style={styles.metricLabel} numberOfLines={2}>{label}</Text>
+          </View>
           {value != null && (
-            <Text style={[styles.interactiveMetricValue, statusColor ? { color: statusColor } : {}]}>
-              {value}
-            </Text>
+            <View style={styles.interactiveMetricValueWrap}>
+              <Text style={[styles.interactiveMetricValue, statusColor ? { color: statusColor } : {}]} numberOfLines={1}>
+                {value}
+              </Text>
+            </View>
           )}
         </View>
         {simpleSubtitle ? (
@@ -138,6 +145,9 @@ const InteractiveMetric = ({
 };
 
 // ─── BIO STATUS SCREEN ────────────────────────────────────────────────────
+const PROFILE_KEY = '@user_profile';
+const LOGS_KEY = '@user_daily_logs';
+
 export default function BioStatusScreen({
   data = DEFAULT_DATA,
   noScroll,
@@ -148,6 +158,37 @@ export default function BioStatusScreen({
 }) {
   const d: BioStatusData = { ...DEFAULT_DATA, ...data };
   const { weather, actions, healthPermissionMissing } = useBio();
+  const { weight: healthWeight, lastWorkoutType } = useHealthConnect();
+  const [profileWeight, setProfileWeight] = useState<number | undefined>(undefined);
+  const [profileHeight, setProfileHeight] = useState<number | undefined>(undefined);
+  const [todayCarbsFromLogs, setTodayCarbsFromLogs] = useState(0);
+  const [yesterdayCarbs, setYesterdayCarbs] = useState(0);
+
+  const loadLabData = useCallback(async () => {
+    try {
+      const profileRaw = await AsyncStorage.getItem(PROFILE_KEY);
+      if (profileRaw) {
+        const p = JSON.parse(profileRaw);
+        const w = parseFloat(p.weight);
+        const h = parseFloat(p.height);
+        if (Number.isFinite(w)) setProfileWeight(w);
+        if (Number.isFinite(h)) setProfileHeight(h);
+      }
+      const logsRaw = await AsyncStorage.getItem(LOGS_KEY);
+      const today = new Date().toISOString().split('T')[0];
+      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+      if (logsRaw) {
+        const all: any[] = JSON.parse(logsRaw);
+        const todayList = all.filter((l: any) => l.date === today);
+        const yesterdayList = all.filter((l: any) => l.date === yesterday);
+        setTodayCarbsFromLogs(todayList.reduce((acc: number, l: any) => acc + (l.carbs || 0), 0));
+        setYesterdayCarbs(yesterdayList.reduce((acc: number, l: any) => acc + (l.carbs || 0), 0));
+      }
+    } catch (_) {}
+  }, []);
+
+  useEffect(() => { loadLabData(); }, [loadLabData]);
+
   const effectiveSaltMessage = weather.loading ? null : (weather.saltAdvice ?? d.saltLoadingMessage);
   const showLiveBadge = !weather.loading && weather.isLive && weather.saltAdvice != null;
 
@@ -163,6 +204,14 @@ export default function BioStatusScreen({
   }, [d.readinessScore, d.hrvScore, d.glycogenLevelPercent, d.sodiumLossMg]);
 
   const stressAvg = getStressAvg(d);
+  const stressLevel = stressAvg > 60 ? 'High' : stressAvg < 30 ? 'Low' : 'Medium';
+  const weight = profileWeight ?? healthWeight ?? undefined;
+  const bmi = weight != null && profileHeight != null && profileHeight > 0 ? weight / Math.pow(profileHeight / 100, 2) : null;
+  const activityType = lastWorkoutType === 'aerobic_intense' ? 'Running' : undefined;
+  const isHighRisk = (bmi != null && bmi > 27) && activityType === 'Running';
+  const weightDiff = healthWeight != null && profileWeight != null ? healthWeight - profileWeight : 0;
+  const detectiveMessage = analyzeWeightTrend(weightDiff, todayCarbsFromLogs, stressLevel, { deficit: false, prevCarbs: yesterdayCarbs });
+  const roccaIndex = null as number | null; // Richiede distanceMeters, durationMinutes, avgHeartRate da ultimo workout
 
   const content = (
     <>
@@ -375,6 +424,44 @@ export default function BioStatusScreen({
         )}
       </SectionCard>
 
+      {/* Lab: Prevenzione infiammazione, Metabolic Detective, Rocca Index */}
+      <SectionCard title="Lab" icon="flask-outline">
+        {isHighRisk && (
+          <InteractiveMetric
+            label="Prevenzione infiammazione"
+            simpleSubtitle="Carico articolare eccessivo: preferisci Camminata in Salita"
+            scienceText="Con BMI > 27 e attività di tipo Running, il carico articolare (fino a 3× il peso) e il cortisolo aumentano. Passa a Camminata in Salita per ridurre impatto e stress infiammatorio."
+            wrapperStyle={styles.labWarningWrap}
+            leftElement={<Ionicons name="warning" size={22} color={ACCENT_AMBER} style={{ marginRight: 10 }} />}
+          >
+            <Text style={styles.labWarningText}>Carico articolare eccessivo (Peso ×3). Cortisolo in aumento. Passa a Camminata in Salita.</Text>
+          </InteractiveMetric>
+        )}
+        {detectiveMessage != null && (
+          <InteractiveMetric
+            label="Metabolic Detective"
+            value={detectiveMessage}
+            statusColor={ACCENT_BTN}
+            simpleSubtitle="Interpretazione trend peso / carbo / stress"
+            scienceText={detectiveMessage}
+            wrapperStyle={styles.metricBlock}
+          />
+        )}
+        {roccaIndex != null && roccaIndex > 0 && (
+          <InteractiveMetric
+            label="Rocca Index (Oxygen Efficiency)"
+            value={`${roccaIndex.toFixed(2)} m/bpm`}
+            statusColor={ACCENT_BTN}
+            simpleSubtitle="Efficienza mitocondriale: metri per battito"
+            scienceText="Indice del Dott. Rocca: metri percorsi al minuto divisi per frequenza cardiaca media. Più alto è il valore, maggiore è l'efficienza nell'utilizzo dell'ossigeno."
+            wrapperStyle={styles.metricBlock}
+          />
+        )}
+        {!isHighRisk && detectiveMessage == null && (roccaIndex == null || roccaIndex <= 0) && (
+          <Text style={styles.labPlaceholder}>Nessun insight al momento. I dati del Lab si aggiornano con profilo, pasti e attività.</Text>
+        )}
+      </SectionCard>
+
       {/* Previsioni */}
       <SectionCard title="Previsioni" icon="trending-up-outline">
         {d.bonkMinutesLeft != null && (
@@ -526,6 +613,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 4,
+    gap: 8,
+  },
+  interactiveMetricLabelWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  interactiveMetricValueWrap: {
+    flexShrink: 0,
   },
   metricSimpleSubtitle: {
     fontSize: 13,
@@ -753,6 +848,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: TEXT_PRIMARY,
     fontWeight: '600',
+  },
+  labWarningWrap: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: 'rgba(245,158,11,0.12)',
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: ACCENT_AMBER,
+  },
+  labWarningText: {
+    fontSize: 13,
+    color: TEXT_PRIMARY,
+    lineHeight: 20,
+  },
+  labPlaceholder: {
+    fontSize: 13,
+    color: TEXT_SECONDARY,
+    fontStyle: 'italic',
+    paddingVertical: 12,
   },
   predRow: {
     flexDirection: 'row',

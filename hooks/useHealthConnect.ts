@@ -421,4 +421,70 @@ const useHealthConnect = () => {
   };
 };
 
+/** Recupera passi, sonno e kcal attive per una data (es. per lo Storico). Se lo smartwatch si sincronizza il giorno dopo, aprendo lo Storico si vedono i dati aggiornati. */
+export async function fetchBioForDate(dateStr: string): Promise<{
+  steps: number;
+  sleepHours: number;
+  activeKcal: number;
+  readiness?: number;
+  hrvMs?: number | null;
+} | null> {
+  if (Platform.OS !== 'android') return null;
+  try {
+    await withTimeout(() => initialize(), TIMEOUT_MS);
+    const granted = await getGrantedPermissions();
+    if (!granted || granted.length === 0) return null;
+
+    const startOfDay = new Date(dateStr + 'T00:00:00.000Z');
+    const endOfDay = new Date(dateStr + 'T23:59:59.999Z');
+
+    let steps = 0;
+    try {
+      const stepsRes = await withTimeout(
+        () =>
+          readRecords('Steps', {
+            timeRangeFilter: { operator: 'between', startTime: startOfDay.toISOString(), endTime: endOfDay.toISOString() },
+          }),
+        TIMEOUT_MS
+      );
+      steps = (stepsRes.records || []).reduce((acc: number, r: any) => acc + (r.count || 0), 0);
+    } catch (_) {}
+
+    let sleepHours = 0;
+    try {
+      const sleepStart = new Date(startOfDay.getTime() - 14 * 60 * 60 * 1000);
+      const sleepRes = await withTimeout(
+        () =>
+          readRecords('SleepSession', {
+            timeRangeFilter: { operator: 'between', startTime: sleepStart.toISOString(), endTime: endOfDay.toISOString() },
+          }),
+        TIMEOUT_MS
+      );
+      sleepHours = (sleepRes.records || []).reduce((acc: number, r: any) => {
+        if (!r.startTime || !r.endTime) return acc;
+        const start = new Date(r.startTime).getTime();
+        const end = new Date(r.endTime).getTime();
+        return acc + (end - start) / (1000 * 60 * 60);
+      }, 0);
+      sleepHours = parseFloat(sleepHours.toFixed(1));
+    } catch (_) {}
+
+    let activeKcal = 0;
+    try {
+      const calRes = await withTimeout(
+        () =>
+          readRecords('ActiveCaloriesBurned', {
+            timeRangeFilter: { operator: 'between', startTime: startOfDay.toISOString(), endTime: endOfDay.toISOString() },
+          }),
+        TIMEOUT_MS
+      );
+      activeKcal = (calRes.records || []).reduce((acc: number, r: any) => acc + (r.energy?.inKilocalories ?? 0), 0);
+    } catch (_) {}
+
+    return { steps, sleepHours, activeKcal };
+  } catch (_) {
+    return null;
+  }
+}
+
 export default useHealthConnect;
