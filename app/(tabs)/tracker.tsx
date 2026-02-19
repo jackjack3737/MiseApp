@@ -17,7 +17,7 @@ import { DS, RADIUS, SPACE } from '../../constants/designSystem';
 import { getWorkoutMultiplier } from '../../constants/workoutTypes';
 import useAnabolicAlgorithm from '../../hooks/useAnabolicAlgorithm';
 import useHealthConnect from '../../hooks/useHealthConnect';
-import { estimateKetones as calculateEstimatedKetones } from '../../utils/ketones';
+import { estimateKetones as calculateEstimatedKetones, KETONE_ESTIMATE_EXPLANATION } from '../../utils/ketones';
 import { calculateMetabolicReactor } from '../../utils/smart-algorithm';
 
 const BG = DS.bg;
@@ -100,6 +100,7 @@ const BarsHeader = ({
   onPressP,
   onPressC,
   onPressF,
+  onPressKetone,
 }: {
   totals: { c: number; p: number; f: number; kcal: number };
   targets: { c: number; p: number; f: number };
@@ -114,6 +115,7 @@ const BarsHeader = ({
   onPressP?: () => void;
   onPressC?: () => void;
   onPressF?: () => void;
+  onPressKetone?: () => void;
 }) => {
   const effectiveC = limitC || targets.c;
   const carbPct = getPct(totals.c, effectiveC);
@@ -128,11 +130,11 @@ const BarsHeader = ({
   const stepsFormatted = (steps || 0).toLocaleString('it-IT') + ' passi';
   return (
     <View style={styles.headerCard}>
-      <View style={[styles.ketoneChip, { backgroundColor: ketoneFeedback.bg }]}>
+      <TouchableOpacity style={[styles.ketoneChip, { backgroundColor: ketoneFeedback.bg }]} onPress={onPressKetone} activeOpacity={0.8}>
         <Text style={styles.ketoneChipTitle}>Stima chetoni</Text>
         <Text style={[styles.ketoneChipValue, { color: ketoneFeedback.color }]}>{ketoneValueStr}</Text>
         <Text style={[styles.ketoneChipLabel, { color: ketoneFeedback.color }]}>{ketoneFeedback.label}</Text>
-      </View>
+      </TouchableOpacity>
       <View style={styles.barsRow}>
         <TouchableOpacity style={styles.barWrap} onPress={onPressP} activeOpacity={0.8} disabled={!onPressP}>
           <View style={styles.barLabelRow}>
@@ -650,8 +652,10 @@ export default function TrackerScreen() {
   const bmrBurnedSoFar = Math.round(bmrPerMinute * minutesPassed);
   const totalBurned = bmrBurnedSoFar + neatKcal + sportKcal;
 
-  // Leonardo Ketone Predictor (netCarbs = carboidrati oggi)
-  const estimatedKetones = calculateEstimatedKetones(logs, todayTotals.c || 0, healthData.steps || 0);
+  const estimatedKetones = calculateEstimatedKetones(logs, todayTotals.c || 0, healthData.steps || 0, {
+    yesterdayCarbs: yesterdayCarbs || undefined,
+    lastMealFromYesterday: yesterdayLastMealTime ? { date: getYesterdayLocal(), time: yesterdayLastMealTime } : undefined,
+  });
 
   return (
     <View style={styles.screen}>
@@ -693,6 +697,7 @@ export default function TrackerScreen() {
             onPressP={() => Alert.alert('Proteine', 'Quanto ne serve per mantenere i muscoli. Il target si adatta al tuo peso e all’allenamento.')}
             onPressC={() => Alert.alert('Carboidrati', 'Il limite si adatta in base a passi, sonno e attività di oggi.')}
             onPressF={() => Alert.alert('Grassi', 'Completano le calorie dopo proteine e carboidrati.')}
+            onPressKetone={() => Alert.alert('Stima chetoni', KETONE_ESTIMATE_EXPLANATION)}
           />
 
           <SmartHint

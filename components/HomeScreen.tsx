@@ -7,18 +7,19 @@ import {
     ActivityIndicator,
     Animated,
     Platform,
+    Alert,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
 } from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { analyzeWeightTrend } from './MetabolicReactor';
 import { DEFAULT_BIO_DATA, getStressAvg, isNadirAfter3AM, type BioStatusData } from '../constants/bioStatusDefault';
 import { useBio } from '../context/BioContext';
 import useHealthConnect from '../hooks/useHealthConnect';
-import { estimateKetones } from '../utils/ketones';
+import { estimateKetones, KETONE_ESTIMATE_EXPLANATION } from '../utils/ketones';
 
 const LOGS_KEY = '@user_daily_logs';
 const PROFILE_KEY = '@user_profile';
@@ -60,16 +61,146 @@ const PILL_RADIUS = 50;
 const DONUT_R = 56;
 const DONUT_STROKE = 12;
 
+/** Gruppi per "Dati di oggi". Rischio calo e finestra post-allenamento sotto livello di stress. */
+const METRIC_GROUPS: { title: string; ids: string[]; visual: 'gauge' | 'segments' | 'icons' }[] = [
+  { title: 'Energia e recupero', ids: ['readiness', 'affaticamento', 'cnsBattery', 'recupero_notte', 'andamento_stress', 'rischio_calo', 'tempo_recupero_pasto'], visual: 'gauge' },
+  { title: 'Metabolismo', ids: ['energia_grassi', 'glycogen', 'efficienza_metabolica', 'reagisci_carboidrati'], visual: 'segments' },
+  { title: 'Sistema e idratazione', ids: ['difese', 'hydration', 'sodio_perso'], visual: 'icons' },
+];
+
+const GAUGE_R = 18;
+const SEGMENTS_COUNT = 5;
+
 function getReadinessColor(value: number): string {
   if (value > 70) return M3.success;
   if (value >= 40) return M3.warning;
   return M3.alert;
 }
 
-/** Tutte le righe della card Dati di oggi (etichette friendly) */
-function getBioRows(d: BioStatusData, m: { readiness: number; cnsBattery: number; glycogen: number; hydration: number }) {
+/** Mini gauge a semicerchio (0–100%) */
+function MiniGauge({ value, color }: { value: number; color: string }) {
+  const pct = Math.min(100, Math.max(0, value));
+  const cx = GAUGE_R + 4;
+  const cy = GAUGE_R + 4;
+  const r = GAUGE_R;
+  const halfLen = Math.PI * r;
+  const filled = (pct / 100) * halfLen;
+  const d = `M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`;
+  return (
+    <Svg width={GAUGE_R * 2 + 8} height={GAUGE_R + 10} viewBox={`0 0 ${GAUGE_R * 2 + 8} ${GAUGE_R + 10}`}>
+      <Path d={d} stroke="rgba(0,0,0,0.1)" strokeWidth={5} fill="none" strokeLinecap="round" />
+      <Path d={d} stroke={color} strokeWidth={5} fill="none" strokeLinecap="round" strokeDasharray={`${filled} ${halfLen}`} />
+    </Svg>
+  );
+}
+
+/** Blocchi discreti (es. 5 segmenti) */
+function SegmentDots({ value, color }: { value: number; color: string }) {
+  const pct = Math.min(100, Math.max(0, value));
+  const filled = Math.round((pct / 100) * SEGMENTS_COUNT);
+  return (
+    <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
+      {Array.from({ length: SEGMENTS_COUNT }).map((_, i) => (
+        <View
+          key={i}
+          style={{
+            width: 8,
+            height: 20,
+            borderRadius: 4,
+            backgroundColor: i < filled ? color : 'rgba(0,0,0,0.08)',
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+
+/** Icone per Sistema e idratazione. Rischio calo e finestra post-allenamento usano orologio. */
+const STATE_ICONS: Record<string, { outline: string; filled: string }> = {
+  difese: { outline: 'shield-outline', filled: 'shield' },
+  hydration: { outline: 'water-outline', filled: 'water' },
+  sodio_perso: { outline: 'flask-outline', filled: 'flask' },
+};
+
+const ICON_FILL_SIZE = 32;
+
+/** Icona fissa che si riempie dal basso (solo il livello sale, l'icona non si sposta) */
+function StateIcon({ row }: { row: { id: string; barValue: number; barColor: string; value: string } }) {
+  const map = STATE_ICONS[row.id];
+  if (!map) return <Ionicons name="ellipse" size={ICON_FILL_SIZE} color={row.barColor} />;
+  let pct = Math.min(100, Math.max(0, row.barValue));
+  if (row.id === 'difese') pct = row.value === 'Stabili' ? 100 : 25;
+  if (row.id === 'rischio_calo') pct = 100 - pct;
+  const fillHeightPx = (pct / 100) * ICON_FILL_SIZE;
+  return (
+    <View style={{ width: ICON_FILL_SIZE, height: ICON_FILL_SIZE, overflow: 'hidden' }}>
+      <View style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }}>
+        <Ionicons name={map.outline as any} size={ICON_FILL_SIZE} color="rgba(0,0,0,0.12)" />
+      </View>
+      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: fillHeightPx, overflow: 'hidden', alignItems: 'center' }}>
+        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: ICON_FILL_SIZE, justifyContent: 'flex-end', alignItems: 'center' }}>
+          <Ionicons name={map.filled as any} size={ICON_FILL_SIZE} color={row.barColor} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Tachimetro stile auto per livello di stress: arco che si riempie in base alla % */
+function StressTachometer({ value, color }: { value: number; color: string }) {
+  return <MiniGauge value={value} color={color} />;
+}
+
+/** Orologio a anello: indica i minuti (es. tempo al calo o finestra post-allenamento). */
+const CLOCK_R = 16;
+function TimeClockRing({ minutes, maxMinutes, color }: { minutes: number; maxMinutes: number; color: string }) {
+  const pct = maxMinutes > 0 ? Math.min(1, minutes / maxMinutes) : 0;
+  const r = CLOCK_R;
+  const cx = r + 4;
+  const cy = r + 4;
+  const circ = 2 * Math.PI * r;
+  const filled = pct * circ;
+  return (
+    <View style={{ width: r * 2 + 8, height: r * 2 + 8, justifyContent: 'center', alignItems: 'center' }}>
+      <Svg width={r * 2 + 8} height={r * 2 + 8} viewBox={`0 0 ${r * 2 + 8} ${r * 2 + 8}`}>
+        <Circle cx={cx} cy={cy} r={r} stroke="rgba(0,0,0,0.1)" strokeWidth={4} fill="none" />
+        <Circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          stroke={color}
+          strokeWidth={4}
+          fill="none"
+          strokeDasharray={`${filled} ${circ}`}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${cx} ${cy})`}
+        />
+      </Svg>
+      <View style={{ position: 'absolute' }}>
+        <Text style={{ fontSize: 10, fontWeight: '700', color }}>{minutes}</Text>
+      </View>
+    </View>
+  );
+}
+
+type BioRow = {
+  id: string;
+  label: string;
+  value: string;
+  barValue: number;
+  barColor: string;
+  rawMinutes?: number;
+};
+
+/** Tutte le righe della card Dati di oggi. Overrides per countdown live (rischio calo). */
+function getBioRows(
+  d: BioStatusData,
+  m: { readiness: number; cnsBattery: number; glycogen: number; hydration: number },
+  overrides?: { bonkMinutesLeft?: number | null }
+): BioRow[] {
   const stressAvg = getStressAvg(d);
   const carbOk = d.deepSleepMinutes >= 60 && d.rhrDeviation <= 2;
+  const bonk = overrides?.bonkMinutesLeft !== undefined ? overrides.bonkMinutesLeft : d.bonkMinutesLeft;
   return [
     { id: 'readiness', label: 'Energia di oggi', value: `${m.readiness}%`, barValue: m.readiness, barColor: getReadinessColor(m.readiness) },
     { id: 'affaticamento', label: 'Stanchezza nervosa', value: `${d.cnsFatiguePercent}%`, barValue: d.cnsFatiguePercent, barColor: d.cnsFatiguePercent > 60 ? M3.alert : d.cnsFatiguePercent > 40 ? M3.warning : M3.accent },
@@ -78,13 +209,13 @@ function getBioRows(d: BioStatusData, m: { readiness: number; cnsBattery: number
     { id: 'glycogen', label: 'Serbatoio zuccheri', value: `${m.glycogen}%`, barValue: m.glycogen, barColor: M3.accent },
     { id: 'efficienza_metabolica', label: 'Efficienza mitocondri', value: `${d.mitochondrialScore}/10`, barValue: (d.mitochondrialScore / 10) * 100, barColor: M3.accent },
     { id: 'reagisci_carboidrati', label: 'Risposta ai carboidrati', value: carbOk ? 'Ottimale' : 'Ridotta', barValue: carbOk ? 100 : Math.min(100, (d.deepSleepMinutes / 60) * 50), barColor: carbOk ? M3.success : d.deepSleepMinutes >= 45 ? M3.warning : M3.alert },
-    { id: 'cnsBattery', label: 'Batteria sistema nervoso', value: `${m.cnsBattery}%`, barValue: m.cnsBattery, barColor: m.cnsBattery >= 60 ? M3.success : m.cnsBattery >= 40 ? M3.warning : M3.alert },
+    { id: 'cnsBattery', label: 'Batteria sistema nervoso', value: `${m.cnsBattery}%`, barValue: m.cnsBattery, barColor: m.cnsBattery >= 60 ? M3.success : m.cnsBattery >= 40 ? M3.warning : M3.accent },
     { id: 'recupero_notte', label: 'Recupero notturno', value: `Nadir ${d.hrNadirTime}`, barValue: isNadirAfter3AM(d.hrNadirTime) ? 25 : 100, barColor: isNadirAfter3AM(d.hrNadirTime) ? M3.alert : M3.success },
+    { id: 'andamento_stress', label: 'Livello di stress', value: `${Math.round(stressAvg)}%`, barValue: stressAvg, barColor: stressAvg > 60 ? M3.alert : stressAvg > 40 ? M3.warning : M3.accent },
     { id: 'hydration', label: 'Idratazione generale', value: `${m.hydration}%`, barValue: m.hydration, barColor: M3.accent },
     { id: 'sodio_perso', label: 'Sale perso oggi', value: `${d.sodiumLossMg} mg`, barValue: Math.min(100, (d.sodiumLossMg / 2000) * 100), barColor: M3.accent },
-    ...(d.bonkMinutesLeft != null ? [{ id: 'rischio_calo', label: 'Rischio calo di energia', value: `Tra ${d.bonkMinutesLeft} min`, barValue: Math.min(100, (d.bonkMinutesLeft / 120) * 100), barColor: d.bonkMinutesLeft >= 60 ? M3.warning : M3.alert }] : []),
-    ...(d.metabolicWindowMinutesLeft != null ? [{ id: 'tempo_recupero_pasto', label: 'Finestra post-allenamento', value: `${d.metabolicWindowMinutesLeft} min`, barValue: Math.min(100, (d.metabolicWindowMinutesLeft / 45) * 100), barColor: M3.accent }] : []),
-    { id: 'andamento_stress', label: 'Livello di stress', value: `${Math.round(stressAvg)}%`, barValue: stressAvg, barColor: stressAvg > 60 ? M3.alert : stressAvg > 40 ? M3.warning : M3.accent },
+    ...(bonk != null ? [{ id: 'rischio_calo' as const, label: 'Rischio calo di energia', value: `Tra ${bonk} min`, barValue: Math.min(100, (bonk / 120) * 100), barColor: bonk >= 60 ? M3.warning : M3.alert, rawMinutes: bonk }] : []),
+    ...(d.metabolicWindowMinutesLeft != null ? [{ id: 'tempo_recupero_pasto' as const, label: 'Finestra post-allenamento', value: `${d.metabolicWindowMinutesLeft} min`, barValue: Math.min(100, (d.metabolicWindowMinutesLeft / 45) * 100), barColor: M3.accent, rawMinutes: d.metabolicWindowMinutesLeft }] : []),
   ];
 }
 
@@ -236,6 +367,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
   const [profileWeight, setProfileWeight] = useState<number | undefined>(undefined);
   const [profileHeight, setProfileHeight] = useState<number | undefined>(undefined);
   const [yesterdayCarbs, setYesterdayCarbs] = useState(0);
+  const [yesterdayLastMealTime, setYesterdayLastMealTime] = useState<string | null>(null);
   const [selectedSymptomId, setSelectedSymptomId] = useState<string | null>(null);
   const [lastSymptomLogId, setLastSymptomLogId] = useState<string | null>(null);
   const [symptomLastUsed, setSymptomLastUsed] = useState<Record<string, string>>({});
@@ -281,6 +413,13 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
         const yesterdayList = all.filter((l: any) => l.date === yesterday);
         const yCarbs = yesterdayList.reduce((acc: number, item: any) => acc + (item.carbs || 0), 0);
         setYesterdayCarbs(yCarbs);
+        const withTimeY = yesterdayList.filter((l: any) => l.time && /^\d{1,2}:\d{2}$/.test(l.time));
+        const lastY = withTimeY.length ? withTimeY.reduce((best: any, l: any) => {
+          const [h, m] = (l.time || '00:00').split(':').map(Number);
+          const [bh, bm] = (best.time || '00:00').split(':').map(Number);
+          return h * 60 + m >= bh * 60 + bm ? l : best;
+        }) : null;
+        setYesterdayLastMealTime(lastY ? lastY.time : null);
         const symptomLog = todayList.find((l: any) => l.meal_type === 'SINTOMO' && l.food_name && l.food_name.startsWith('SINTOMO:'));
         if (symptomLog) {
           const namePart = (symptomLog.food_name || '').replace('SINTOMO:', '').trim().toLowerCase();
@@ -297,6 +436,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
         setTodayLogs([]);
         setTodayTotals({ kcal: 0, c: 0, p: 0, f: 0 });
         setYesterdayCarbs(0);
+        setYesterdayLastMealTime(null);
         setSelectedSymptomId(null);
         setLastSymptomLogId(null);
       }
@@ -324,12 +464,28 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
   const bmrBurnedSoFar = Math.round(bmrPerMinute * minutesPassed);
   const totalBurned = bmrBurnedSoFar + neatKcal + sportKcal;
   const bilancioKcal = kcalAssunte - totalBurned;
-  const estimatedKetones = estimateKetones(todayLogs, todayTotals.c || 0, steps || 0);
+  const estimatedKetones = estimateKetones(todayLogs, todayTotals.c || 0, steps || 0, {
+    yesterdayCarbs: yesterdayCarbs || undefined,
+    lastMealFromYesterday: yesterdayLastMealTime ? { date: getYesterdayLocal(), time: yesterdayLastMealTime } : undefined,
+  });
   const sleepDisplay = (sleepHours || 0) > 0 ? ((sleepHours || 0) % 1 === 0 ? `${Math.round(sleepHours || 0)}h` : `${(sleepHours || 0).toFixed(1)}h`) : '--';
   const activityDisplay = sportKcal > 0 ? `${sportKcal} kcal` : `${(steps || 0).toLocaleString('it-IT')} passi`;
 
   const dateLabel = now.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
-  const bioRows = getBioRows(DEFAULT_BIO_DATA, metrics);
+
+  const bonkInitial = DEFAULT_BIO_DATA.bonkMinutesLeft ?? null;
+  const [countdownTick, setCountdownTick] = useState(0);
+  const bonkStartRef = React.useRef<{ initial: number; startAt: number } | null>(null);
+  if (bonkInitial != null && bonkStartRef.current == null) bonkStartRef.current = { initial: bonkInitial, startAt: Date.now() };
+  const liveBonkMinutes: number | null = bonkStartRef.current
+    ? Math.max(0, bonkStartRef.current.initial - Math.floor((Date.now() - bonkStartRef.current.startAt) / 60000))
+    : bonkInitial;
+  useEffect(() => {
+    const t = setInterval(() => setCountdownTick((x) => x + 1), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  const bioRows = getBioRows(DEFAULT_BIO_DATA, metrics, { bonkMinutesLeft: liveBonkMinutes ?? undefined });
   const carbKcal = (todayTotals.c || 0) * 4;
   const proteinKcal = (todayTotals.p || 0) * 4;
   const fatKcal = (todayTotals.f || 0) * 9;
@@ -464,7 +620,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
             <View style={styles.dailyDataRow}><Text style={styles.dailyDataLabel}>Kcal bruciate</Text><Text style={styles.dailyDataValue}>{totalBurned}</Text></View>
             <View style={styles.dailyDataRow}><Text style={styles.dailyDataLabel}>Attività</Text><Text style={styles.dailyDataValue}>{activityDisplay}</Text></View>
             <View style={styles.dailyDataRow}><Text style={styles.dailyDataLabel}>Sonno</Text><Text style={styles.dailyDataValue}>{sleepDisplay}</Text></View>
-            <View style={styles.dailyDataRow}><Text style={styles.dailyDataLabel}>Stima chetoni</Text><Text style={styles.dailyDataValue}>{estimatedKetones.toFixed(1)}</Text></View>
+            <TouchableOpacity style={styles.dailyDataRow} onPress={() => Alert.alert('Stima chetoni', KETONE_ESTIMATE_EXPLANATION)} activeOpacity={0.8}>
+              <Text style={styles.dailyDataLabel}>Stima chetoni</Text><Text style={styles.dailyDataValue}>{estimatedKetones.toFixed(1)}</Text>
+            </TouchableOpacity>
             <View style={[styles.dailyDataRow, styles.dailyDataRowBalance]}><Text style={styles.dailyDataLabel}>Bilancio</Text><Text style={[styles.dailyDataValue, { color: bilancioKcal <= 0 ? M3.success : M3.text }]}>{bilancioKcal} kcal</Text></View>
           </View>
         </View>
@@ -481,27 +639,54 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ refreshKey = 0 }) => {
           <Text style={styles.pillBtnText}>Salute e sintomi</Text>
         </TouchableOpacity>
 
-        {/* Dati di oggi — barre compatte + tendina spiegazione */}
+        {/* Dati di oggi — card raggruppate, gauge + segmenti */}
         <View style={styles.metricsCard}>
           <Text style={styles.metricsCardTitle}>Dati di oggi</Text>
-          {bioRows.map((row) => {
-            const isExpanded = expandedMetricId === row.id;
-            const explanation = getExplanation(row.id);
+          {METRIC_GROUPS.map((group) => {
+            const rows = bioRows.filter((r) => group.ids.includes(r.id));
+            if (rows.length === 0) return null;
             return (
-              <View key={row.id} style={styles.metricRowWrap}>
-                <TouchableOpacity style={styles.metricRow} onPress={() => setExpandedMetricId((prev) => (prev === row.id ? null : row.id))} activeOpacity={0.8}>
-                  <Text style={styles.metricRowLabel}>{row.label}</Text>
-                  <Text style={[styles.metricRowValue, { color: row.barColor }]}>{row.value}</Text>
-                  <View style={styles.metricTrack}>
-                    <View style={[styles.metricFill, { width: `${Math.min(100, row.barValue)}%`, backgroundColor: row.barColor }]} />
-                  </View>
-                </TouchableOpacity>
-                {isExpanded && explanation && (
-                  <View style={styles.metricTendina}>
-                    <Text style={styles.metricTendinaTitle}>{explanation.title}</Text>
-                    <Text style={styles.metricTendinaBody}>{explanation.body}</Text>
-                  </View>
-                )}
+              <View key={group.title} style={styles.metricGroupBlock}>
+                <Text style={styles.metricGroupTitle}>{group.title}</Text>
+                {rows.map((row) => {
+                  const isExpanded = expandedMetricId === row.id;
+                  const explanation = getExplanation(row.id);
+                  const useGauge = group.visual === 'gauge';
+                  const useIcons = group.visual === 'icons';
+                  return (
+                    <View key={row.id} style={styles.metricRowWrap}>
+                      <TouchableOpacity style={styles.metricRowMixed} onPress={() => setExpandedMetricId((prev) => (prev === row.id ? null : row.id))} activeOpacity={0.8}>
+                        <View style={styles.metricRowLeft}>
+                          <Text style={styles.metricRowLabel}>{row.label}</Text>
+                          <Text style={[styles.metricRowValue, { color: row.barColor }]}>{row.value}</Text>
+                        </View>
+                        <View style={styles.metricRowRight}>
+                          {row.id === 'andamento_stress' ? (
+                            <StressTachometer value={row.barValue} color={row.barColor} />
+                          ) : (row.id === 'rischio_calo' || row.id === 'tempo_recupero_pasto') && row.rawMinutes != null ? (
+                            <TimeClockRing
+                              minutes={row.rawMinutes}
+                              maxMinutes={row.id === 'rischio_calo' ? 120 : 45}
+                              color={row.barColor}
+                            />
+                          ) : useIcons ? (
+                            <StateIcon row={row} />
+                          ) : useGauge ? (
+                            <MiniGauge value={row.barValue} color={row.barColor} />
+                          ) : (
+                            <SegmentDots value={row.barValue} color={row.barColor} />
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                      {isExpanded && explanation && (
+                        <View style={styles.metricTendina}>
+                          <Text style={styles.metricTendinaTitle}>{explanation.title}</Text>
+                          <Text style={styles.metricTendinaBody}>{explanation.body}</Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
               </View>
             );
           })}
@@ -669,9 +854,14 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   metricsCardTitle: { fontSize: 13, color: M3.textMuted, marginBottom: 16, letterSpacing: 0.5 },
+  metricGroupBlock: { marginBottom: 20 },
+  metricGroupTitle: { fontSize: 12, fontWeight: '600', color: M3.textMuted, letterSpacing: 0.5, marginBottom: 10 },
   metricRowWrap: { marginBottom: 14 },
   metricRow: {},
-  metricRowLabel: { fontSize: 14, color: M3.textBody, marginBottom: 4 },
+  metricRowMixed: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  metricRowLeft: { flex: 1, minWidth: 0 },
+  metricRowRight: { marginLeft: 12 },
+  metricRowLabel: { fontSize: 14, color: M3.textBody, marginBottom: 2 },
   metricRowValue: { fontSize: 16, fontWeight: '600' },
   metricTrack: { height: 6, backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 3, overflow: 'hidden' },
   metricFill: { height: '100%', borderRadius: 3 },
